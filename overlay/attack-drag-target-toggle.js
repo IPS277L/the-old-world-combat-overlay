@@ -10,7 +10,7 @@ const PreciseTextClass = foundry.canvas.containers.PreciseText;
 const DRAG_LINE_OUTER_COLOR = 0x1A0909;
 const DRAG_LINE_OUTER_ALPHA = 0.85;
 const DRAG_LINE_OUTER_WIDTH = 7;
-const DRAG_LINE_INNER_COLOR = 0xB75B5B;
+const DRAG_LINE_INNER_COLOR = 0x8F2A2A;
 const DRAG_LINE_INNER_ALPHA = 0.96;
 const DRAG_LINE_INNER_WIDTH = 3;
 const DRAG_ARROW_SIZE = 13;
@@ -64,6 +64,13 @@ function getWorldPoint(event) {
     return canvas.stage.worldTransform.applyInverse(global);
   }
   return canvas.mousePosition ?? null;
+}
+
+function isShiftModifier(event) {
+  if (event?.shiftKey === true) return true;
+  if (event?.data?.originalEvent?.shiftKey === true) return true;
+  if (event?.nativeEvent?.shiftKey === true) return true;
+  return game.keyboard?.isModifierActive?.(KeyboardManager.MODIFIER_KEYS.SHIFT) === true;
 }
 
 function tokenAtPoint(point, { excludeTokenId } = {}) {
@@ -701,13 +708,21 @@ function createAtkUi(tokenObject) {
       const ready = await ensureTowActions();
       if (!ready) return;
 
+      const shiftManual = isShiftModifier(upEvent);
+      setSingleTarget(target);
+
+      if (shiftManual) {
+        // Manual chain: let user choose attack/safety and subsequent damage/stagger options.
+        await game.towActions.attackActor(sourceToken.actor, { manual: true });
+        return;
+      }
+
       const restoreStaggerPrompt = armDefaultStaggerChoiceWound(
         [sourceToken.actor, target.actor],
         AUTO_STAGGER_PATCH_MS
       );
 
       const sourceBeforeState = snapshotActorState(sourceToken.actor);
-      setSingleTarget(target);
       armAutoDefenceForOpposed(sourceToken, target, { sourceBeforeState });
       try {
         await game.towActions.attackActor(sourceToken.actor, { manual: false });
