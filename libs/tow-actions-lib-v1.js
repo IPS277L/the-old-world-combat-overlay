@@ -6,9 +6,33 @@ const TOW_ACTIONS_VERSION = "1.0.0";
 const SHIFT_KEY = foundry.helpers.interaction.KeyboardManager.MODIFIER_KEYS.SHIFT;
 const DEFAULT_DEFENCE_SKILL = "defence";
 const SELF_ROLL_CONTEXT = { skipTargets: true, targets: [] };
+const ATTACK_CALL_DEDUPE_MS = 700;
 
 function isShiftHeld() {
   return game.keyboard.isModifierActive(SHIFT_KEY);
+}
+
+function shouldExecuteAttack(actor, { manual = false } = {}) {
+  if (!actor) return false;
+
+  const api = game[TOW_ACTIONS_KEY];
+  if (!api) return true;
+  if (!api._attackCallDeduper) api._attackCallDeduper = new Map();
+
+  const key = `${game.user.id}:${actor.id}:${manual ? "manual" : "auto"}`;
+  const now = Date.now();
+  const last = Number(api._attackCallDeduper.get(key) ?? 0);
+  if (now - last < ATTACK_CALL_DEDUPE_MS) return false;
+
+  api._attackCallDeduper.set(key, now);
+
+  if (api._attackCallDeduper.size > 200) {
+    for (const [entryKey, ts] of api._attackCallDeduper.entries()) {
+      if (now - Number(ts) > ATTACK_CALL_DEDUPE_MS * 3) api._attackCallDeduper.delete(entryKey);
+    }
+  }
+
+  return true;
 }
 
 function toElement(appElement) {
@@ -74,6 +98,8 @@ async function waitForChatMessage(messageId, timeoutMs = 3000) {
 async function appendDamageToMessage(message, damage) {
   if (!message) return;
   if ((message.content ?? "").includes("tow-damage-inline")) return;
+  const targetCount = Number(message.system?.test?.context?.targetSpeakers?.length ?? 0);
+  if (targetCount > 0) return; // Avoid retriggering opposed card creation via message update hooks.
 
   await message.update({
     content: `${message.content}
@@ -390,6 +416,7 @@ function renderDefenceSelector(actor, entries) {
 
 async function attackActor(actor, { manual = false } = {}) {
   if (!actor) return;
+  if (!shouldExecuteAttack(actor, { manual })) return;
   const attacks = getSortedWeaponAttacks(actor);
   if (attacks.length === 0) return;
 
