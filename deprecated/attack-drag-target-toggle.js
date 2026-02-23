@@ -546,8 +546,14 @@ async function applyDamageWithWoundsFallback(defenderActor, damageValue, context
       return this.parent.createEmbeddedDocuments("Item", [{ type: "wound", name: "Wound" }]);
     };
 
-    // Prevent noisy system error by bypassing table roll when no wounds table is configured.
-    if (!hasTable) return fallbackGenericWound();
+    // Keep system wound/death scripts, just skip table roll path.
+    if (!hasTable) {
+      try {
+        return await originalAddWound({ ...options, roll: false });
+      } catch (error) {
+        return fallbackGenericWound();
+      }
+    }
 
     try {
       const result = await originalAddWound(options);

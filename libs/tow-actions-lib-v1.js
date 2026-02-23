@@ -95,19 +95,44 @@ async function waitForChatMessage(messageId, timeoutMs = 3000) {
   return game.messages.get(messageId) ?? null;
 }
 
-async function appendDamageToMessage(message, damage) {
-  if (!message) return;
-  if ((message.content ?? "").includes("tow-damage-inline")) return;
-  const targetCount = Number(message.system?.test?.context?.targetSpeakers?.length ?? 0);
-  if (targetCount > 0) return; // Avoid retriggering opposed card creation via message update hooks.
+function getDamageRenderState() {
+  const api = game[TOW_ACTIONS_KEY];
+  if (!api) return null;
+  if (!api._damageRenderDeduper) api._damageRenderDeduper = new Set();
+  return api._damageRenderDeduper;
+}
 
-  await message.update({
-    content: `${message.content}
-      <hr>
-      <div class="tow-damage-inline" style="font-size: 16px">
-        <strong>Damage:</strong> ${damage}
-      </div>`
+async function postSeparateDamageMessage(message, damage) {
+  if (!message) return;
+  const targetCount = Number(message.system?.test?.context?.targetSpeakers?.length ?? 0);
+  if (targetCount > 0) return; // Do not interfere with opposed creation/update flows.
+
+  const dedupe = getDamageRenderState();
+  const dedupeKey = `separate:${message.id}`;
+  if (dedupe?.has(dedupeKey)) return;
+  dedupe?.add(dedupeKey);
+
+  const content = `<div style="
+      border-top: 1px solid rgba(130,110,80,0.45);
+      border-bottom: 1px solid rgba(130,110,80,0.45);
+      margin: 4px 0;
+      padding: 6px 8px;
+      text-align: center;
+      font-size: var(--font-size-16);
+      letter-spacing: 0.04em;
+      opacity: 0.9;">
+      <strong>Damage:</strong> ${Number(damage ?? 0)}
+    </div>`;
+
+  await ChatMessage.create({
+    content,
+    speaker: message.speaker ?? {}
   });
+}
+
+async function renderDamageDisplay(message, { damage }) {
+  if (!message) return;
+  await postSeparateDamageMessage(message, damage);
 }
 
 function armDamageAppend(actor, ability) {
@@ -129,7 +154,7 @@ function armDamageAppend(actor, ability) {
 
     cleanup(hookId);
     const flatDamage = test?.testData?.damage ?? ability.system.damage?.value ?? 0;
-    await appendDamageToMessage(message, flatDamage);
+    await renderDamageDisplay(message, { damage: flatDamage });
   });
 
   timeoutId = setTimeout(() => cleanup(hookId), 30000);
@@ -178,7 +203,7 @@ async function setupAbilityTestWithDamage(actor, ability, { autoRoll = false } =
 
   const flatDamage = testRef.testData?.damage ?? ability.system.damage?.value ?? 0;
   const message = await waitForChatMessage(testRef.context?.messageId);
-  await appendDamageToMessage(message, flatDamage);
+  await renderDamageDisplay(message, { damage: flatDamage });
   return testRef;
 }
 
