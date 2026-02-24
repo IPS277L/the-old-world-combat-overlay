@@ -17,7 +17,8 @@ const KEYS = {
   staggerLayer: "_towStaggerBgLayer",
   staggerApplying: "_towStaggerApplying",
   staggerSignature: "_towStaggerSig",
-  staggerTimers: "_towStaggerTimers"
+  staggerTimers: "_towStaggerTimers",
+  deadVisualState: "_towDeadVisualState"
 };
 
 const STATUS_BG_RULES = [
@@ -668,7 +669,8 @@ async function postFlowSeparatorCard(opposed, { sourceStatusHints = [], targetSt
 
   await ChatMessage.create({
     content,
-    speaker: { alias: "Combat Flow" }
+    speaker: { alias: "Combat Flow" },
+    rolls: []
   });
 }
 
@@ -676,6 +678,53 @@ function clearDisplayObject(displayObject) {
   if (!displayObject) return;
   displayObject.parent?.removeChild(displayObject);
   displayObject.destroy({ children: true });
+}
+
+function getDeadFilterTargets(tokenObject) {
+  return [tokenObject?.mesh, tokenObject?.icon].filter(Boolean);
+}
+
+function ensureDeadVisual(tokenObject) {
+  if (!tokenObject) return;
+  const hasDead = !!tokenObject.document?.actor?.hasCondition?.("dead");
+  if (!hasDead) {
+    clearDeadVisual(tokenObject);
+    return;
+  }
+  // Rebuild each refresh so tweaks to filter settings apply immediately.
+  if (tokenObject[KEYS.deadVisualState]) clearDeadVisual(tokenObject);
+
+  const targets = getDeadFilterTargets(tokenObject);
+  const entries = [];
+
+  for (const displayObject of targets) {
+    const originalFilters = Array.isArray(displayObject.filters) ? [...displayObject.filters] : [];
+    const originalAlpha = Number(displayObject.alpha ?? 1);
+    const originalTint = Number(displayObject.tint ?? 0xFFFFFF);
+    const deadFilter = new PIXI.ColorMatrixFilter();
+    deadFilter.brightness(0.70, false);
+    displayObject.alpha = Math.max(0.92, originalAlpha);
+    if ("tint" in displayObject) displayObject.tint = 0x5A5A5A;
+    displayObject.filters = [...originalFilters, deadFilter];
+    entries.push({ displayObject, originalFilters, deadFilter, originalAlpha, originalTint });
+  }
+
+  tokenObject[KEYS.deadVisualState] = { entries };
+}
+
+function clearDeadVisual(tokenObject) {
+  const state = tokenObject?.[KEYS.deadVisualState];
+  if (!state) return;
+
+  for (const entry of state.entries ?? []) {
+    const displayObject = entry?.displayObject;
+    if (!displayObject || displayObject.destroyed) continue;
+    displayObject.filters = Array.isArray(entry.originalFilters) ? entry.originalFilters : null;
+    if (typeof entry.originalAlpha === "number") displayObject.alpha = entry.originalAlpha;
+    if (typeof entry.originalTint === "number" && "tint" in displayObject) displayObject.tint = entry.originalTint;
+  }
+
+  delete tokenObject[KEYS.deadVisualState];
 }
 
 function getWoundCount(tokenDocument) {
@@ -1377,12 +1426,14 @@ function clearAllStaggerBackgrounds() {
     clearStaggerTimers(token);
     token[KEYS.staggerSignature] = "";
     removeStaggerLayer(token);
+    clearDeadVisual(token);
   });
 }
 
 function refreshTokenOverlay(tokenObject) {
   updateWoundControlUI(tokenObject);
   updateResilienceLabel(tokenObject);
+  ensureDeadVisual(tokenObject);
 }
 
 function refreshActorOverlays(actor) {
