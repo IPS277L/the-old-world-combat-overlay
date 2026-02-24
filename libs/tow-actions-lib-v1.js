@@ -7,6 +7,7 @@ const SHIFT_KEY = foundry.helpers.interaction.KeyboardManager.MODIFIER_KEYS.SHIF
 const DEFAULT_DEFENCE_SKILL = "defence";
 const SELF_ROLL_CONTEXT = { skipTargets: true, targets: [] };
 const ATTACK_CALL_DEDUPE_MS = 700;
+const DAMAGE_RENDER_DEDUPE_MS = 120000;
 
 function isShiftHeld() {
   return game.keyboard.isModifierActive(SHIFT_KEY);
@@ -98,8 +99,23 @@ async function waitForChatMessage(messageId, timeoutMs = 3000) {
 function getDamageRenderState() {
   const api = game[TOW_ACTIONS_KEY];
   if (!api) return null;
-  if (!api._damageRenderDeduper) api._damageRenderDeduper = new Set();
+  if (!api._damageRenderDeduper) api._damageRenderDeduper = new Map();
   return api._damageRenderDeduper;
+}
+
+function markDamageRender(dedupe, key) {
+  if (!dedupe || !key) return false;
+  const now = Date.now();
+  const last = Number(dedupe.get(key) ?? 0);
+  if (now - last < DAMAGE_RENDER_DEDUPE_MS) return false;
+  dedupe.set(key, now);
+
+  if (dedupe.size > 250) {
+    for (const [entryKey, ts] of dedupe.entries()) {
+      if (now - Number(ts) > DAMAGE_RENDER_DEDUPE_MS * 2) dedupe.delete(entryKey);
+    }
+  }
+  return true;
 }
 
 async function postSeparateDamageMessage(message, damage) {
@@ -109,8 +125,7 @@ async function postSeparateDamageMessage(message, damage) {
 
   const dedupe = getDamageRenderState();
   const dedupeKey = `separate:${message.id}`;
-  if (dedupe?.has(dedupeKey)) return;
-  dedupe?.add(dedupeKey);
+  if (!markDamageRender(dedupe, dedupeKey)) return;
 
   const content = `<div style="
       border-top: 1px solid rgba(130,110,80,0.45);

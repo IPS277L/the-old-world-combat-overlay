@@ -1,9 +1,11 @@
 const LIB_MACRO_CANDIDATES = ["tow-actions-lib-v1", "tow-actions-lib"];
 
-async function ensureTowActions() {
-  const hasApi = typeof game.towActions?.runDefenceForControlled === "function" &&
-    typeof game.towActions?.isShiftHeld === "function";
-  if (hasApi) return true;
+function hasRequiredTowActions(requiredMethods) {
+  return requiredMethods.every((method) => typeof game.towActions?.[method] === "function");
+}
+
+async function ensureTowActions(requiredMethods) {
+  if (hasRequiredTowActions(requiredMethods)) return true;
 
   const libMacro = LIB_MACRO_CANDIDATES
     .map((name) => game.macros.getName(name))
@@ -21,15 +23,15 @@ async function ensureTowActions() {
     return false;
   }
 
-  const loaded = typeof game.towActions?.runDefenceForControlled === "function" &&
-    typeof game.towActions?.isShiftHeld === "function";
+  const loaded = hasRequiredTowActions(requiredMethods);
   if (!loaded) {
     ui.notifications.error("Shared actions loaded, but defence API is unavailable.");
   }
   return loaded;
 }
 
-const loaded = await ensureTowActions();
+const REQUIRED_METHODS = ["runDefenceForControlled", "isShiftHeld"];
+const loaded = await ensureTowActions(REQUIRED_METHODS);
 if (!loaded) return;
 
 await game.towActions.runDefenceForControlled({ manual: game.towActions.isShiftHeld() });

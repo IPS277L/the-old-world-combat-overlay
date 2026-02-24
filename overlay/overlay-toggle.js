@@ -44,6 +44,7 @@ const OPPOSED_LINK_WAIT_MS = 700;
 const AUTO_STAGGER_PATCH_MS = 12000;
 const FLOW_CARD_FONT_SIZE = "var(--font-size-16)";
 const FLOW_CARD_CHIP_FONT_SIZE = "var(--font-size-12)";
+const ACTOR_OVERLAY_RESYNC_DELAYS_MS = [50, 180];
 
 const WOUND_ITEM_TYPE = "wound";
 const STAGGERED_CONDITION = "staggered";
@@ -74,6 +75,24 @@ function forEachActorToken(actor, callback) {
     const tokenObject = asTokenObject(token);
     if (tokenObject) callback(tokenObject);
   }
+}
+
+function getActorTokenObjects(actor) {
+  const seen = new Set();
+  const tokens = [];
+  forEachActorToken(actor, (tokenObject) => {
+    if (!tokenObject?.id || seen.has(tokenObject.id)) return;
+    seen.add(tokenObject.id);
+    tokens.push(tokenObject);
+  });
+
+  const syntheticToken = asTokenObject(actor?.token);
+  if (syntheticToken?.id && !seen.has(syntheticToken.id)) {
+    seen.add(syntheticToken.id);
+    tokens.push(syntheticToken);
+  }
+
+  return tokens;
 }
 
 function preventPointerDefault(event) {
@@ -424,34 +443,20 @@ async function applyDamageWithWoundsFallback(defenderActor, damageValue, context
   }
 
   system.addWound = async function wrappedAddWound(options = {}) {
-    const currentWoundCount = () => Number((this.parent?.items?.contents ?? []).filter((i) => i.type === WOUND_ITEM_TYPE).length);
-    const beforeCount = currentWoundCount();
     const tableId = game.settings.get("whtow", "tableSettings")?.wounds;
     const hasTable = !!(tableId && game.tables.get(tableId));
 
-    const fallbackGenericWound = async () => {
-      const afterCount = currentWoundCount();
-      if (afterCount > beforeCount) return null;
-      ui.notifications.warn("Wounds table missing. Applied generic Wound.");
-      return this.parent.createEmbeddedDocuments("Item", [{ type: "wound", name: "Wound" }]);
-    };
-
     if (!hasTable) {
-      // Keep system wound/death scripts, just skip table roll path.
-      try {
-        const result = await originalAddWound({ ...options, roll: false });
-        await new Promise((resolve) => setTimeout(resolve, 25));
-        if (currentWoundCount() <= beforeCount) return fallbackGenericWound();
-        return result;
-      } catch (error) {
-        return fallbackGenericWound();
-      }
+      // Keep system wound/death scripts; only bypass table rolling.
+      return originalAddWound({ ...options, roll: false });
     }
     try {
       return await originalAddWound(options);
     } catch (error) {
       const message = String(error?.message ?? error ?? "");
-      if (message.includes("No table found for wounds")) return fallbackGenericWound();
+      if (message.includes("No table found for wounds")) {
+        return originalAddWound({ ...options, roll: false });
+      }
       throw error;
     }
   };
@@ -676,77 +681,18 @@ function getWoundCount(tokenDocument) {
   const actor = tokenDocument?.actor;
   if (!actor) return null;
   const liveItems = actor.items?.contents ?? [];
-  if (Array.isArray(liveItems)) {
-    return liveItems.filter((item) => item.type === WOUND_ITEM_TYPE).length;
-  }
-  if (Array.isArray(actor.itemTypes?.wound)) return actor.itemTypes.wound.length;
-  return 0;
+  const itemWounds = Array.isArray(liveItems)
+    ? liveItems.filter((item) => item.type === WOUND_ITEM_TYPE).length
+    : (Array.isArray(actor.itemTypes?.wound) ? actor.itemTypes.wound.length : 0);
+
+  // Minions can become dead via system addWound without creating wound items.
+  const isMinion = actor.type === "npc" && actor.system?.type === "minion";
+  if (isMinion && actor.hasCondition?.("dead")) return Math.max(1, itemWounds);
+  return itemWounds;
 }
 
 function getResilienceValue(tokenDocument) {
   return tokenDocument?.actor?.system?.resilience?.value ?? null;
-}
-
-function getActorWoundCount(actor) {
-  const liveItems = actor?.items?.contents ?? [];
-  if (Array.isArray(liveItems)) {
-    return liveItems.filter((item) => item.type === WOUND_ITEM_TYPE).length;
-  }
-  if (Array.isArray(actor?.itemTypes?.wound)) return actor.itemTypes.wound.length;
-  return 0;
-}
-
-async function normalizeDeadCondition(actor) {
-  const deadEffects = Array.from(actor?.effects?.contents ?? []).filter((effect) =>
-    effect?.statuses?.has?.("dead")
-  );
-  if (deadEffects.length <= 1) return;
-
-  const toDelete = deadEffects.slice(1).map((effect) => effect.id).filter(Boolean);
-  if (toDelete.length) await actor.deleteEmbeddedDocuments("ActiveEffect", toDelete);
-}
-
-async function syncDeadFromWounds(actor) {
-  if (!actor || !canEditActor(actor)) return;
-  const state = game[MODULE_KEY];
-  if (state) {
-    if (!state.deadSyncInFlight) state.deadSyncInFlight = new Set();
-    if (state.deadSyncInFlight.has(actor.id)) return;
-    state.deadSyncInFlight.add(actor.id);
-  }
-
-  try {
-    const wounds = getActorWoundCount(actor);
-    const npcType = String(actor.system?.type ?? "");
-    const hasThresholds = actor.system?.hasThresholds === true;
-    const isDead = actor.hasCondition?.("dead") === true;
-
-    // Manual wound controls: if wounds are fully cleared, clear dead as well.
-    if (wounds <= 0) {
-      if (isDead) await actor.removeCondition("dead");
-      await normalizeDeadCondition(actor);
-      return;
-    }
-
-    let shouldBeDead = null;
-    if (npcType === "minion") {
-      shouldBeDead = wounds >= 1;
-    } else if (hasThresholds && typeof actor.system?.thresholdAtWounds === "function") {
-      shouldBeDead = actor.system.thresholdAtWounds(wounds) === "defeated";
-    }
-
-    if (shouldBeDead !== null) {
-      if (shouldBeDead && !isDead) {
-        await actor.addCondition("dead");
-      } else if (!shouldBeDead && isDead) {
-        await actor.removeCondition("dead");
-      }
-    }
-
-    await normalizeDeadCondition(actor);
-  } finally {
-    state?.deadSyncInFlight?.delete(actor.id);
-  }
 }
 
 async function addWound(actor) {
@@ -754,8 +700,11 @@ async function addWound(actor) {
     warnNoPermission(actor);
     return;
   }
-  await actor.createEmbeddedDocuments("Item", [{ type: WOUND_ITEM_TYPE, name: "Wound" }]);
-  await syncDeadFromWounds(actor);
+  if (typeof actor.system?.addWound === "function") {
+    await actor.system.addWound({ roll: false });
+  } else {
+    await actor.createEmbeddedDocuments("Item", [{ type: WOUND_ITEM_TYPE, name: "Wound" }]);
+  }
 }
 
 async function removeWound(actor) {
@@ -772,8 +721,14 @@ async function removeWound(actor) {
   }
 
   try {
-  const wounds = actor.itemTypes?.wound ?? actor.items.filter((item) => item.type === WOUND_ITEM_TYPE);
-  if (!wounds.length) return;
+  const wounds = (actor.items?.contents ?? []).filter((item) => item.type === WOUND_ITEM_TYPE);
+  if (!wounds.length) {
+    const isMinion = actor.type === "npc" && actor.system?.type === "minion";
+    if (isMinion && actor.hasCondition?.("dead")) {
+      await actor.removeCondition("dead");
+    }
+    return;
+  }
 
   const toDelete = wounds.find((wound) => wound.system?.treated !== true) ?? wounds[wounds.length - 1];
   if (!toDelete) return;
@@ -786,7 +741,6 @@ async function removeWound(actor) {
       if (msg.includes("does not exist")) return;
       throw error;
     }
-    await syncDeadFromWounds(actor);
   } finally {
     if (state?.woundDeleteInFlight) state.woundDeleteInFlight.delete(actor.id);
   }
@@ -1347,10 +1301,30 @@ function refreshTokenOverlay(tokenObject) {
 }
 
 function refreshActorOverlays(actor) {
-  forEachActorToken(actor, (tokenObject) => {
+  for (const tokenObject of getActorTokenObjects(actor)) {
     refreshTokenOverlay(tokenObject);
     scheduleStaggerRefresh(tokenObject);
-  });
+  }
+}
+
+function queueActorOverlayResync(actor) {
+  if (!actor) return;
+  const state = game[MODULE_KEY];
+  if (!state) return;
+  if (!state.actorOverlayResyncTimers) state.actorOverlayResyncTimers = new Map();
+
+  const key = actor.uuid ?? actor.id;
+  if (!key) return;
+
+  const existing = state.actorOverlayResyncTimers.get(key);
+  if (Array.isArray(existing)) {
+    for (const timer of existing) clearTimeout(timer);
+  }
+
+  const timers = ACTOR_OVERLAY_RESYNC_DELAYS_MS.map((delayMs) => setTimeout(() => {
+    refreshActorOverlays(actor);
+  }, delayMs));
+  state.actorOverlayResyncTimers.set(key, timers);
 }
 
 function refreshAllOverlays() {
@@ -1365,13 +1339,19 @@ function registerHooks() {
     canvasReady: Hooks.on("canvasReady", refreshAllOverlays),
     refreshToken: Hooks.on("refreshToken", (token) => refreshTokenOverlay(token)),
     createItem: Hooks.on("createItem", (item) => {
-      if (item.type === WOUND_ITEM_TYPE) refreshActorOverlays(item.parent);
+      if (item.type !== WOUND_ITEM_TYPE) return;
+      refreshActorOverlays(item.parent);
+      queueActorOverlayResync(item.parent);
     }),
     updateItem: Hooks.on("updateItem", (item) => {
-      if (item.type === WOUND_ITEM_TYPE) refreshActorOverlays(item.parent);
+      if (item.type !== WOUND_ITEM_TYPE) return;
+      refreshActorOverlays(item.parent);
+      queueActorOverlayResync(item.parent);
     }),
     deleteItem: Hooks.on("deleteItem", (item) => {
-      if (item.type === WOUND_ITEM_TYPE) refreshActorOverlays(item.parent);
+      if (item.type !== WOUND_ITEM_TYPE) return;
+      refreshActorOverlays(item.parent);
+      queueActorOverlayResync(item.parent);
     }),
     createActiveEffect: Hooks.on("createActiveEffect", (effect) => refreshActorOverlays(effect?.parent)),
     updateActiveEffect: Hooks.on("updateActiveEffect", (effect) => refreshActorOverlays(effect?.parent)),
@@ -1395,13 +1375,21 @@ if (!game[MODULE_KEY]) {
     ...registerHooks(),
     recentAttacks: new Map(),
     recentTargets: new Map(),
-    autoApplyArmed: new Set()
+    autoApplyArmed: new Set(),
+    actorOverlayResyncTimers: new Map()
   };
   refreshAllOverlays();
   ui.notifications.info("Overlay enabled: wounds + resilience + status highlights.");
 } else {
   const state = game[MODULE_KEY];
   unregisterHooks(state);
+  if (state?.actorOverlayResyncTimers instanceof Map) {
+    for (const timers of state.actorOverlayResyncTimers.values()) {
+      if (!Array.isArray(timers)) continue;
+      for (const timer of timers) clearTimeout(timer);
+    }
+    state.actorOverlayResyncTimers.clear();
+  }
   if (state?.staggerWaitPatch && typeof foundry.applications?.api?.Dialog?.wait === "function") {
     foundry.applications.api.Dialog.wait = state.staggerWaitPatch.originalWait;
   }

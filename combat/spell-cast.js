@@ -5,11 +5,14 @@ if (!tokens.length) {
   return ui.notifications.warn("Select at least one token.");
 }
 
-const SHIFT_KEY = foundry.helpers.interaction.KeyboardManager.MODIFIER_KEYS.SHIFT;
-const shiftHeld = game.keyboard.isModifierActive(SHIFT_KEY);
+function isShiftHeld() {
+  if (typeof game.towActions?.isShiftHeld === "function") return game.towActions.isShiftHeld();
+  const shiftKey = foundry.helpers.interaction.KeyboardManager.MODIFIER_KEYS.SHIFT;
+  return game.keyboard.isModifierActive(shiftKey);
+}
 
 // Common flow is auto-roll. Holding Shift switches to manual selection.
-const rollPath = shiftHeld ? "manual" : "auto";
+const rollPath = isShiftHeld() ? "manual" : "auto";
 const SELF_ROLL_CONTEXT = { skipTargets: true, targets: [] };
 
 function escapeHtml(value) {
@@ -159,5 +162,6 @@ async function runSpellFlow(actor) {
 }
 
 for (const token of tokens) {
+  if (!token?.actor) continue;
   await runSpellFlow(token.actor);
 }
