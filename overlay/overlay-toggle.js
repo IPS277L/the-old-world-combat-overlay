@@ -14,18 +14,28 @@ const KEYS = {
   woundUiMarker: "_towOverlayWoundUiMarker",
   woundUiTokenId: "_towOverlayWoundUiTokenId",
   resilienceLabel: "_towResilienceLabel",
-  staggerLayer: "_towStaggerBgLayer",
-  staggerApplying: "_towStaggerApplying",
-  staggerSignature: "_towStaggerSig",
-  staggerTimers: "_towStaggerTimers",
-  deadVisualState: "_towDeadVisualState"
+  defaultEffectsVisible: "_towDefaultEffectsVisible",
+  statusPaletteLayer: "_towStatusPaletteLayer",
+  statusPaletteMetrics: "_towStatusPaletteMetrics",
+  deadVisualState: "_towDeadVisualState",
+  statusIconHandler: "_towStatusIconHandler"
 };
 
-const STATUS_BG_RULES = [
-  { id: "staggered", iconPart: "/conditions/staggered.svg", color: 0xFFD54A, alpha: 0.9 },
-  { id: "dead", iconPart: "/conditions/dead.svg", color: 0xFFFFFF, alpha: 0.98 }
-];
-const STAGGER_REFRESH_DELAY_MS = 90;
+const STATUS_PALETTE_ICON_SIZE = 20;
+const STATUS_PALETTE_ICON_GAP = 2;
+const STATUS_PALETTE_ROWS = 2;
+const STATUS_PALETTE_TOKEN_PAD = 6;
+const STATUS_PALETTE_INACTIVE_TINT = 0x7A7A7A;
+const STATUS_PALETTE_ACTIVE_TINT = 0xFFFFFF;
+const STATUS_PALETTE_STAGGERED_RING = 0xFFD54A;
+const STATUS_PALETTE_DEAD_RING = 0xFFFFFF;
+const STATUS_PALETTE_SPECIAL_BG_PAD = 1;
+const STATUS_PALETTE_SPECIAL_BG_RADIUS = 3;
+const STATUS_PALETTE_SPECIAL_BG_OUTLINE = 0x171717;
+const STATUS_PALETTE_SPECIAL_BG_OUTLINE_WIDTH = 1;
+const STATUS_PALETTE_SPECIAL_BG_OUTLINE_ALPHA = 0.72;
+const STATUS_PALETTE_SPECIAL_BG_STAGGERED_ALPHA = 0.58;
+const STATUS_PALETTE_SPECIAL_BG_DEAD_ALPHA = 0.62;
 const OVERLAY_FONT_SIZE = 22;
 const DRAG_START_THRESHOLD_PX = 8;
 const DRAG_LINE_OUTER_COLOR = 0x1A0909;
@@ -47,9 +57,9 @@ const FLOW_CARD_FONT_SIZE = "var(--font-size-16)";
 const FLOW_CARD_CHIP_FONT_SIZE = "var(--font-size-12)";
 const ACTOR_OVERLAY_RESYNC_DELAYS_MS = [50, 180];
 const DEAD_SYNC_DEBOUNCE_MS = 60;
+const DEAD_TO_WOUND_SYNC_DEBOUNCE_MS = 80;
 
 const WOUND_ITEM_TYPE = "wound";
-const STAGGERED_CONDITION = "staggered";
 
 function canEditActor(actor) {
   return actor?.isOwner === true;
@@ -789,14 +799,15 @@ async function syncNpcDeadFromWounds(actor) {
     if (shouldBeDead === hasDead) return;
 
     if (shouldBeDead) {
-      await actor.addCondition("dead");
+      await runActorOpLock(actor, "condition:dead", async () => {
+        if (actor.hasCondition?.("dead")) return;
+        await actor.addCondition("dead");
+      });
     } else {
-      try {
+      await runActorOpLock(actor, "condition:dead", async () => {
+        if (!actor.hasCondition?.("dead")) return;
         await actor.removeCondition("dead");
-      } catch (error) {
-        const msg = String(error?.message ?? error ?? "");
-        if (!msg.includes("does not exist")) throw error;
-      }
+      });
     }
   } finally {
     state.deadSyncInFlight.delete(actorKey);
@@ -824,6 +835,71 @@ function queueDeadSyncFromWounds(actor) {
   state.deadSyncTimers.set(actorKey, timer);
 }
 
+async function syncWoundsFromDeadState(actor) {
+  if (!actor || !canEditActor(actor)) return;
+  const state = game[MODULE_KEY];
+  if (!state) return;
+  if (!state.deadPresenceByActor) state.deadPresenceByActor = new Map();
+
+  const actorKey = actor.uuid ?? actor.id;
+  if (!actorKey) return;
+
+  const hasDead = !!actor.hasCondition?.("dead");
+  const wasDead = state.deadPresenceByActor.get(actorKey) === true;
+  state.deadPresenceByActor.set(actorKey, hasDead);
+
+  const cap = getMaxWoundLimit(actor);
+  if (!Number.isFinite(cap) || cap <= 0) return;
+
+  if (hasDead) {
+    await runActorOpLock(actor, "dead-wound-sync", async () => {
+      const current = getActorWoundItemCount(actor);
+      const missing = Math.max(0, cap - current);
+      if (missing <= 0) return;
+      // Create wounds one-by-one to avoid duplicate side-effects from batched creation.
+      for (let i = 0; i < missing; i++) {
+        await actor.createEmbeddedDocuments("Item", [{ type: WOUND_ITEM_TYPE, name: "Wound" }]);
+      }
+    }).catch((error) => {
+      console.error("[overlay-toggle] Failed to sync wounds from dead condition.", error);
+    });
+    return;
+  }
+
+  if (!wasDead) return;
+  await runActorOpLock(actor, "dead-wound-sync", async () => {
+    const maxPasses = Math.max(1, getActorWoundItemCount(actor) + 2);
+    for (let i = 0; i < maxPasses; i++) {
+      const wounds = (actor.items?.contents ?? []).filter((item) => item.type === WOUND_ITEM_TYPE);
+      if (!wounds.length) break;
+      const toDelete = wounds.find((wound) => wound.system?.treated !== true) ?? wounds[wounds.length - 1];
+      if (!toDelete?.id || !actor.items.get(toDelete.id)) break;
+      await actor.deleteEmbeddedDocuments("Item", [toDelete.id]);
+    }
+  }).catch((error) => {
+    console.error("[overlay-toggle] Failed to clear wounds after removing dead condition.", error);
+  });
+}
+
+function queueWoundSyncFromDeadState(actor) {
+  if (!actor) return;
+  const state = game[MODULE_KEY];
+  if (!state) return;
+  if (!state.deadToWoundSyncTimers) state.deadToWoundSyncTimers = new Map();
+
+  const actorKey = actor.uuid ?? actor.id;
+  if (!actorKey) return;
+
+  const existingTimer = state.deadToWoundSyncTimers.get(actorKey);
+  if (existingTimer) clearTimeout(existingTimer);
+
+  const timer = setTimeout(() => {
+    state.deadToWoundSyncTimers.delete(actorKey);
+    void syncWoundsFromDeadState(actor);
+  }, DEAD_TO_WOUND_SYNC_DEBOUNCE_MS);
+  state.deadToWoundSyncTimers.set(actorKey, timer);
+}
+
 function getResilienceValue(tokenDocument) {
   return tokenDocument?.actor?.system?.resilience?.value ?? null;
 }
@@ -847,50 +923,21 @@ async function removeWound(actor) {
     return;
   }
 
-  const state = game[MODULE_KEY];
-  if (state) {
-    if (!state.woundDeleteInFlight) state.woundDeleteInFlight = new Set();
-    if (state.woundDeleteInFlight.has(actor.id)) return;
-    state.woundDeleteInFlight.add(actor.id);
-  }
-
-  try {
-  const wounds = (actor.items?.contents ?? []).filter((item) => item.type === WOUND_ITEM_TYPE);
-  if (!wounds.length) {
-    const isMinion = actor.type === "npc" && actor.system?.type === "minion";
-    if (isMinion && actor.hasCondition?.("dead")) {
-      await actor.removeCondition("dead");
+  await runActorOpLock(actor, "remove-wound", async () => {
+    const wounds = (actor.items?.contents ?? []).filter((item) => item.type === WOUND_ITEM_TYPE);
+    if (!wounds.length) {
+      const isMinion = actor.type === "npc" && actor.system?.type === "minion";
+      if (isMinion && actor.hasCondition?.("dead")) {
+        await actor.removeCondition("dead");
+      }
+      return;
     }
-    return;
-  }
 
-  const toDelete = wounds.find((wound) => wound.system?.treated !== true) ?? wounds[wounds.length - 1];
-  if (!toDelete) return;
-  if (!actor.items.get(toDelete.id)) return;
-
-    try {
-      await actor.deleteEmbeddedDocuments("Item", [toDelete.id]);
-    } catch (error) {
-      const msg = String(error?.message ?? error ?? "");
-      if (msg.includes("does not exist")) return;
-      throw error;
-    }
-  } finally {
-    if (state?.woundDeleteInFlight) state.woundDeleteInFlight.delete(actor.id);
-  }
-}
-
-async function toggleStaggered(actor) {
-  if (!canEditActor(actor)) {
-    warnNoPermission(actor);
-    return;
-  }
-
-  if (actor.hasCondition?.(STAGGERED_CONDITION)) {
-    await actor.removeCondition(STAGGERED_CONDITION);
-  } else {
-    await actor.addCondition(STAGGERED_CONDITION);
-  }
+    const toDelete = wounds.find((wound) => wound.system?.treated !== true) ?? wounds[wounds.length - 1];
+    if (!toDelete?.id) return;
+    if (!actor.items.get(toDelete.id)) return;
+    await actor.deleteEmbeddedDocuments("Item", [toDelete.id]);
+  });
 }
 
 function getControlStyle() {
@@ -946,10 +993,6 @@ function createWoundControlUI(tokenObject) {
   countHitBox.buttonMode = true;
   countHitBox.cursor = "pointer";
 
-  const staggerText = new PreciseTextClass("STAG", getControlStyle());
-  staggerText.anchor.set(0, 0.5);
-  staggerText.eventMode = "none";
-
   const attackText = new PreciseTextClass("ATK", getControlStyle());
   attackText.anchor.set(1, 0.5);
   attackText.eventMode = "none";
@@ -970,12 +1013,6 @@ function createWoundControlUI(tokenObject) {
   defenceHitBox.buttonMode = true;
   defenceHitBox.cursor = "pointer";
 
-  const staggerHitBox = new PIXI.Graphics();
-  staggerHitBox.eventMode = "static";
-  staggerHitBox.interactive = true;
-  staggerHitBox.buttonMode = true;
-  staggerHitBox.cursor = "pointer";
-
   countHitBox.on("pointerdown", async (event) => {
     preventPointerDefault(event);
     const actor = getActorFromToken(tokenObject);
@@ -993,14 +1030,6 @@ function createWoundControlUI(tokenObject) {
     await removeWound(actor);
   });
   countHitBox.on("contextmenu", preventPointerDefault);
-
-  staggerHitBox.on("pointerdown", async (event) => {
-    preventPointerDefault(event);
-    const actor = getActorFromToken(tokenObject);
-    if (!actor) return;
-    await toggleStaggered(actor);
-  });
-  staggerHitBox.on("contextmenu", preventPointerDefault);
 
   attackHitBox.on("pointerdown", async (event) => {
     preventPointerDefault(event);
@@ -1094,8 +1123,6 @@ function createWoundControlUI(tokenObject) {
 
   container.addChild(countHitBox);
   container.addChild(countText);
-  container.addChild(staggerHitBox);
-  container.addChild(staggerText);
   container.addChild(attackHitBox);
   container.addChild(defenceHitBox);
   container.addChild(attackText);
@@ -1103,8 +1130,6 @@ function createWoundControlUI(tokenObject) {
 
   container._countText = countText;
   container._countHitBox = countHitBox;
-  container._staggerText = staggerText;
-  container._staggerHitBox = staggerHitBox;
   container._attackHitBox = attackHitBox;
   container._defenceHitBox = defenceHitBox;
   container._attackText = attackText;
@@ -1130,15 +1155,12 @@ function updateWoundControlUI(tokenObject) {
   const existingUi = tokenObject[KEYS.woundUI];
   const hasBrokenTextStyle = !!existingUi && (
     !existingUi._countText ||
-    !existingUi._staggerText ||
     !existingUi._attackText ||
     !existingUi._defenceText ||
     existingUi._countText.destroyed ||
-    existingUi._staggerText.destroyed ||
     existingUi._attackText.destroyed ||
     existingUi._defenceText.destroyed ||
     !existingUi._countText.style ||
-    !existingUi._staggerText.style ||
     !existingUi._attackText.style ||
     !existingUi._defenceText.style
   );
@@ -1148,8 +1170,7 @@ function updateWoundControlUI(tokenObject) {
     hasBrokenTextStyle ||
     existingUi._attackHitBox?.destroyed ||
     existingUi._defenceHitBox?.destroyed ||
-    existingUi._countHitBox?.destroyed ||
-    existingUi._staggerHitBox?.destroyed
+    existingUi._countHitBox?.destroyed
   );
   if (staleUi) {
     clearDisplayObject(existingUi);
@@ -1160,20 +1181,16 @@ function updateWoundControlUI(tokenObject) {
     ? createWoundControlUI(tokenObject)
     : tokenObject[KEYS.woundUI];
   const actor = getActorFromToken(tokenObject);
-  const hasStaggered = !!actor?.hasCondition?.(STAGGERED_CONDITION);
 
   const countText = ui._countText;
   const countHitBox = ui._countHitBox;
-  const staggerText = ui._staggerText;
-  const staggerHitBox = ui._staggerHitBox;
   const attackHitBox = ui._attackHitBox;
   const defenceHitBox = ui._defenceHitBox;
   const attackText = ui._attackText;
   const defenceText = ui._defenceText;
 
   try {
-    countText.text = `W:${count}`;
-    staggerText.text = "STAG";
+    countText.text = `W: ${count}`;
     attackText.text = "ATK";
     defenceText.text = "DEF";
   } catch (_error) {
@@ -1185,29 +1202,21 @@ function updateWoundControlUI(tokenObject) {
   const padX = 5;
   const padY = 3;
   const rowGap = Math.max(18, countText.height + 4);
-  const topY = -(rowGap / 2);
-  const bottomY = topY + rowGap;
-  const leftTopY = topY;
-  const leftBottomY = bottomY;
+  const centerY = 0;
+  const rightBottomY = centerY + (rowGap / 2);
+  const leftTopY = -(rowGap / 2);
+  const leftBottomY = leftTopY + rowGap;
 
   drawHitBoxRect(
     countHitBox,
     -padX,
-    topY - (countText.height / 2) - padY,
+    rightBottomY - (countText.height / 2) - padY,
     countText.width + (padX * 2),
     countText.height + (padY * 2)
   );
-  drawHitBoxRect(
-    staggerHitBox,
-    -padX,
-    bottomY - (staggerText.height / 2) - padY,
-    staggerText.width + (padX * 2),
-    staggerText.height + (padY * 2)
-  );
 
   ui.position.set(tokenObject.x + tokenObject.w + 6, tokenObject.y + (tokenObject.h / 2));
-  countText.position.set(0, topY);
-  staggerText.position.set(0, bottomY);
+  countText.position.set(0, rightBottomY);
 
   const leftX = -(tokenObject.w + 10);
   attackText.position.set(leftX, leftTopY);
@@ -1230,8 +1239,6 @@ function updateWoundControlUI(tokenObject) {
 
   const editable = canEditActor(actor);
   countText.alpha = editable ? 1 : 0.45;
-  staggerText.alpha = editable ? 1 : 0.45;
-  staggerText.style.fill = hasStaggered ? "#f5e8c8" : "#9f9f9f";
   attackText.alpha = 1;
   defenceText.alpha = 1;
   ui.visible = tokenObject.visible;
@@ -1270,13 +1277,15 @@ function updateResilienceLabel(tokenObject) {
   let label = tokenObject[KEYS.resilienceLabel];
   if (!label) {
     label = new PreciseTextClass("", getResilienceStyle());
-    label.anchor.set(0.5, 1);
+    label.anchor.set(0, 0.5);
     tokenObject.addChild(label);
     tokenObject[KEYS.resilienceLabel] = label;
   }
 
   label.text = `RES ${resilience}`;
-  label.position.set(tokenObject.w / 2, -2);
+  const rowGap = Math.max(18, label.height + 4);
+  const rightTopY = (tokenObject.h / 2) - (rowGap / 2);
+  label.position.set(tokenObject.w + 6, rightTopY);
   label.visible = tokenObject.visible;
 }
 
@@ -1299,147 +1308,361 @@ function getIconSrc(displayObject) {
   );
 }
 
-function getStatusBgRule(sprite) {
-  if (!sprite?.texture) return false;
-  const src = String(getIconSrc(sprite)).toLowerCase();
-  return STATUS_BG_RULES.find((rule) => src.includes(rule.iconPart)) ?? null;
+function normalizeIconSrc(src) {
+  return String(src ?? "").trim().toLowerCase().split("?")[0];
 }
 
-function clearStaggeredGraphics(token) {
-  const layer = token?.[KEYS.staggerLayer];
-  if (!layer) return;
-  layer.removeChildren().forEach((child) => child.destroy());
+function extractConditionIdFromSrc(src) {
+  const match = normalizeIconSrc(src).match(/\/conditions\/([a-z0-9_-]+)\.svg$/);
+  return match?.[1] ?? null;
 }
 
-function ensureStaggerLayer(token) {
-  if (!token) return null;
-  const effects = token.effects;
-  if (!effects) return null;
+function getActorEffects(actor) {
+  return Array.from(actor?.effects?.contents ?? []);
+}
 
-  let layer = token[KEYS.staggerLayer];
-  if (!layer) {
-    layer = new PIXI.Container();
-    layer.eventMode = "none";
-    layer.interactiveChildren = false;
-    token[KEYS.staggerLayer] = layer;
+function getEffectIconSrc(effect) {
+  return normalizeIconSrc(effect?.img ?? effect?.icon ?? "");
+}
+
+async function runActorOpLock(actor, opKey, operation) {
+  const state = game[MODULE_KEY];
+  if (!state || !actor || !opKey || typeof operation !== "function") return;
+  if (!state.statusRemoveInFlight) state.statusRemoveInFlight = new Set();
+  const actorKey = actor.uuid ?? actor.id;
+  if (!actorKey) return;
+
+  const lockKey = `${actorKey}:${String(opKey)}`;
+  if (state.statusRemoveInFlight.has(lockKey)) return;
+  state.statusRemoveInFlight.add(lockKey);
+  try {
+    await operation();
+  } finally {
+    state.statusRemoveInFlight.delete(lockKey);
+  }
+}
+
+function getActorStatusSet(actor) {
+  const statuses = new Set(Array.from(actor?.statuses ?? []).map((s) => String(s)));
+  for (const effect of getActorEffects(actor)) {
+    for (const status of Array.from(effect?.statuses ?? [])) {
+      statuses.add(String(status));
+    }
+  }
+  return statuses;
+}
+
+function getAllConditionEntries() {
+  const conditions = game.oldworld?.config?.conditions ?? {};
+  return Object.entries(conditions)
+    .map(([id, data]) => ({
+      id: String(id),
+      img: String(data?.img ?? data?.icon ?? `/systems/whtow/assets/icons/conditions/${id}.svg`)
+    }))
+    .filter((entry) => !!entry.id && !!entry.img);
+}
+
+function resolveEffectFromIcon(actor, sprite) {
+  const spriteSrc = normalizeIconSrc(getIconSrc(sprite));
+  if (!spriteSrc) return null;
+  return getActorEffects(actor).find((effect) => getEffectIconSrc(effect) === spriteSrc) ?? null;
+}
+
+async function removeStatusIconEffect(tokenObject, sprite) {
+  const actor = getActorFromToken(tokenObject);
+  if (!actor) return;
+  if (!canEditActor(actor)) {
+    warnNoPermission(actor);
+    return;
   }
 
-  const effectsIndex = token.getChildIndex(effects);
-  const layerIndex = Math.max(0, effectsIndex - 1);
-  if (layer.parent !== token) token.addChildAt(layer, layerIndex);
-  else token.setChildIndex(layer, layerIndex);
-  return layer;
+  const effect = resolveEffectFromIcon(actor, sprite);
+  const conditionId = extractConditionIdFromSrc(getIconSrc(sprite));
+  const removeKey = effect?.id ?? conditionId ?? normalizeIconSrc(getIconSrc(sprite));
+  if (!removeKey) return;
+
+  await runActorOpLock(actor, `remove:${removeKey}`, async () => {
+    if (effect) {
+      if (actor.effects?.has?.(effect.id)) await effect.delete();
+    } else if (conditionId && actor.hasCondition?.(conditionId)) {
+      await actor.removeCondition(conditionId);
+    }
+  });
 }
 
-function removeStaggerLayer(token) {
-  const layer = token?.[KEYS.staggerLayer];
+function clearStatusIconHandler(sprite) {
+  const handler = sprite?.[KEYS.statusIconHandler];
+  if (!handler) return;
+  sprite.off("pointerdown", handler);
+  sprite.off("contextmenu", handler);
+  delete sprite[KEYS.statusIconHandler];
+}
+
+function setupStatusIconClickHandlers(tokenObject) {
+  const effects = tokenObject?.effects;
+  const sprites = Array.isArray(effects?.children) ? effects.children : [];
+  for (const sprite of sprites) {
+    if (!sprite || !sprite.texture) continue;
+    clearStatusIconHandler(sprite);
+
+    const onDown = async (event) => {
+      preventPointerDefault(event);
+      if (getMouseButton(event) !== 0) return;
+      await removeStatusIconEffect(tokenObject, sprite);
+    };
+
+    sprite.eventMode = "static";
+    sprite.interactive = true;
+    sprite.cursor = canEditActor(getActorFromToken(tokenObject)) ? "pointer" : "default";
+    sprite.on("pointerdown", onDown);
+    sprite[KEYS.statusIconHandler] = onDown;
+  }
+}
+
+function clearStatusPalette(tokenObject) {
+  const layer = tokenObject?.[KEYS.statusPaletteLayer];
   if (!layer) return;
+  for (const child of layer.children ?? []) clearStatusIconHandler(child);
   layer.removeChildren().forEach((child) => child.destroy());
   layer.parent?.removeChild(layer);
   layer.destroy();
-  delete token[KEYS.staggerLayer];
+  delete tokenObject[KEYS.statusPaletteLayer];
+  delete tokenObject[KEYS.statusPaletteMetrics];
 }
 
-function applyStaggeredBackground(token) {
-  if (!token || token[KEYS.staggerApplying]) return;
-  const effects = token.effects;
-  if (!effects?.children) return;
+function hideDefaultStatusPanel(tokenObject) {
+  const effects = tokenObject?.effects;
+  if (!effects) return;
+  if (typeof tokenObject[KEYS.defaultEffectsVisible] === "undefined") {
+    tokenObject[KEYS.defaultEffectsVisible] = effects.visible !== false;
+  }
+  effects.visible = false;
+}
 
-  token[KEYS.staggerApplying] = true;
-  try {
-    const highlightedSprites = effects.children
-      .map((sprite) => ({ sprite, rule: getStatusBgRule(sprite) }))
-      .filter((entry) => entry.rule);
-    const layer = ensureStaggerLayer(token);
-    if (!layer) return;
-    layer.position.set(effects.x, effects.y);
+function restoreDefaultStatusPanel(tokenObject) {
+  const effects = tokenObject?.effects;
+  if (!effects) return;
+  const prior = tokenObject[KEYS.defaultEffectsVisible];
+  effects.visible = (typeof prior === "boolean") ? prior : true;
+  delete tokenObject[KEYS.defaultEffectsVisible];
+}
 
-    if (highlightedSprites.length === 0) {
-      if (token[KEYS.staggerSignature] !== "") {
-        clearStaggeredGraphics(token);
-        token[KEYS.staggerSignature] = "";
-      }
-      layer.visible = false;
-      return;
+async function toggleConditionFromPalette(actor, conditionId) {
+  if (!actor || !conditionId) return;
+  if (!canEditActor(actor)) {
+    warnNoPermission(actor);
+    return;
+  }
+  const hasCondition = !!actor.hasCondition?.(conditionId);
+  if (hasCondition) {
+    await runActorOpLock(actor, `condition:${conditionId}`, async () => {
+      if (!actor.hasCondition?.(conditionId)) return;
+      await actor.removeCondition(conditionId);
+    });
+  } else {
+    await runActorOpLock(actor, `condition:${conditionId}`, async () => {
+      if (actor.hasCondition?.(conditionId)) return;
+      await actor.addCondition(conditionId);
+    });
+  }
+}
+
+function stylePaletteSprite(sprite, actor, conditionId, activeStatuses = null) {
+  const statuses = activeStatuses instanceof Set ? activeStatuses : getActorStatusSet(actor);
+  const active = statuses.has(String(conditionId ?? ""));
+  const key = String(conditionId ?? "").toLowerCase();
+  const iconSrc = normalizeIconSrc(getIconSrc(sprite));
+  const conditionImgSrc = normalizeIconSrc(sprite?._towConditionImg ?? "");
+  const specialKind = (() => {
+    if (key.includes("stagger")) return "staggered";
+    if (key.includes("dead")) return "dead";
+    if (conditionImgSrc.includes("/conditions/staggered.svg")) return "staggered";
+    if (conditionImgSrc.includes("/conditions/dead.svg")) return "dead";
+    if (iconSrc.includes("/conditions/staggered.svg")) return "staggered";
+    if (iconSrc.includes("/conditions/dead.svg")) return "dead";
+    return null;
+  })();
+  const clearLegacySpecials = () => {
+    const ring = sprite._towPaletteRing;
+    if (ring) {
+      ring.parent?.removeChild(ring);
+      ring.destroy();
+      delete sprite._towPaletteRing;
     }
-
-    const signature = highlightedSprites
-      .map((entry) => `${entry.rule.id}:${entry.sprite.x},${entry.sprite.y},${entry.sprite.width},${entry.sprite.height}`)
-      .join("|");
-    if (token[KEYS.staggerSignature] === signature) {
-      layer.visible = true;
-      return;
+    const filter = sprite._towPaletteFilter;
+    if (filter) {
+      filter.destroy?.();
+      delete sprite._towPaletteFilter;
     }
+    delete sprite._towPaletteFilterKind;
+    sprite.filters = null;
+  };
 
-    clearStaggeredGraphics(token);
-    layer.visible = true;
+  const clearSpecialBg = () => {
+    const bg = sprite._towPaletteBg;
+    if (!bg) return;
+    bg.parent?.removeChild(bg);
+    bg.destroy();
+    delete sprite._towPaletteBg;
+  };
 
-    for (const entry of highlightedSprites) {
-      const sprite = entry.sprite;
-      const bg = new PIXI.Graphics();
-      bg.beginFill(entry.rule.color, entry.rule.alpha);
-      bg.drawRoundedRect(
-        sprite.x - 1,
-        sprite.y - 1,
-        Math.max(2, sprite.width + 2),
-        Math.max(2, sprite.height + 2),
-        4
+  const applySpecialBg = (color, alpha) => {
+    let bg = sprite._towPaletteBg;
+    if (!bg || bg.destroyed) {
+      bg = new PIXI.Graphics();
+      bg.eventMode = "none";
+      bg._towPaletteHelper = true;
+      sprite._towPaletteBg = bg;
+      sprite.parent?.addChildAt(bg, 0);
+    } else if (bg.parent !== sprite.parent) {
+      bg.parent?.removeChild(bg);
+      sprite.parent?.addChildAt(bg, 0);
+    }
+    const size = Number.isFinite(Number(sprite._towIconSize)) ? Number(sprite._towIconSize) : STATUS_PALETTE_ICON_SIZE;
+    const pad = STATUS_PALETTE_SPECIAL_BG_PAD;
+    bg.clear();
+    bg.lineStyle({
+      width: STATUS_PALETTE_SPECIAL_BG_OUTLINE_WIDTH,
+      color: STATUS_PALETTE_SPECIAL_BG_OUTLINE,
+      alpha: STATUS_PALETTE_SPECIAL_BG_OUTLINE_ALPHA,
+      alignment: 0.5
+    });
+    bg.beginFill(color, alpha);
+    bg.drawRoundedRect(
+      sprite.x - pad,
+      sprite.y - pad,
+      Math.max(2, size + (pad * 2)),
+      Math.max(2, size + (pad * 2)),
+      STATUS_PALETTE_SPECIAL_BG_RADIUS
+    );
+    bg.endFill();
+  };
+
+  if (!active) {
+    sprite.tint = STATUS_PALETTE_INACTIVE_TINT;
+    sprite.alpha = 0.40;
+    clearLegacySpecials();
+    clearSpecialBg();
+    return;
+  }
+
+  clearLegacySpecials();
+  sprite.alpha = 0.98;
+
+  if (specialKind === "staggered") {
+    sprite.tint = STATUS_PALETTE_ACTIVE_TINT;
+    applySpecialBg(STATUS_PALETTE_STAGGERED_RING, STATUS_PALETTE_SPECIAL_BG_STAGGERED_ALPHA);
+    return;
+  }
+
+  if (specialKind === "dead") {
+    sprite.tint = STATUS_PALETTE_ACTIVE_TINT;
+    applySpecialBg(STATUS_PALETTE_DEAD_RING, STATUS_PALETTE_SPECIAL_BG_DEAD_ALPHA);
+    return;
+  }
+
+  sprite.tint = STATUS_PALETTE_ACTIVE_TINT;
+  clearSpecialBg();
+}
+
+function setupStatusPalette(tokenObject) {
+  if (!tokenObject || tokenObject.destroyed) return;
+  const actor = getActorFromToken(tokenObject);
+  if (!actor) return;
+
+  const conditions = getAllConditionEntries();
+  if (!conditions.length) {
+    clearStatusPalette(tokenObject);
+    return;
+  }
+
+  const expectedCount = conditions.length;
+  const iconSize = STATUS_PALETTE_ICON_SIZE;
+  let layer = tokenObject[KEYS.statusPaletteLayer];
+  const shouldRebuild = !layer
+    || layer.destroyed
+    || (layer.children?.length ?? 0) !== expectedCount
+    || tokenObject[KEYS.statusPaletteMetrics]?.iconSize !== iconSize;
+
+  if (shouldRebuild) {
+    clearStatusPalette(tokenObject);
+    layer = new PIXI.Container();
+    layer.eventMode = "static";
+    layer.interactive = true;
+    layer.interactiveChildren = true;
+    canvas.tokens.addChild(layer);
+    tokenObject[KEYS.statusPaletteLayer] = layer;
+
+    const columns = Math.max(1, Math.ceil(expectedCount / STATUS_PALETTE_ROWS));
+    for (let i = 0; i < conditions.length; i++) {
+      const condition = conditions[i];
+      const sprite = PIXI.Sprite.from(condition.img);
+      sprite.width = iconSize;
+      sprite.height = iconSize;
+      sprite.eventMode = "static";
+      sprite.interactive = true;
+      sprite.cursor = canEditActor(actor) ? "pointer" : "default";
+      sprite._towConditionId = condition.id;
+      sprite._towConditionImg = condition.img;
+      sprite._towIconSize = iconSize;
+
+      const col = i % columns;
+      const row = Math.floor(i / columns);
+      sprite.position.set(
+        col * (iconSize + STATUS_PALETTE_ICON_GAP),
+        row * (iconSize + STATUS_PALETTE_ICON_GAP)
       );
-      bg.endFill();
-      layer.addChild(bg);
+
+      const onDown = async (event) => {
+        preventPointerDefault(event);
+        if (getMouseButton(event) !== 0) return;
+        await toggleConditionFromPalette(actor, condition.id);
+      };
+      sprite.on("pointerdown", onDown);
+      sprite[KEYS.statusIconHandler] = onDown;
+
+      layer.addChild(sprite);
     }
+    tokenObject[KEYS.statusPaletteMetrics] = { iconSize };
+  }
 
-    token[KEYS.staggerSignature] = signature;
-  } finally {
-    token[KEYS.staggerApplying] = false;
+  const columns = Math.max(1, Math.ceil(expectedCount / STATUS_PALETTE_ROWS));
+  const totalRows = Math.ceil(expectedCount / columns);
+  const totalWidth = (columns * iconSize) + ((columns - 1) * STATUS_PALETTE_ICON_GAP);
+  const totalHeight = (totalRows * iconSize) + ((totalRows - 1) * STATUS_PALETTE_ICON_GAP);
+  const posX = tokenObject.x + Math.round((tokenObject.w - totalWidth) / 2);
+  const posY = tokenObject.y + Math.round(tokenObject.h + STATUS_PALETTE_TOKEN_PAD);
+  layer.position.set(posX, posY);
+  layer.visible = tokenObject.visible;
+  const activeStatuses = getActorStatusSet(actor);
+
+  for (const sprite of layer.children?.filter((child) => child?._towConditionId) ?? []) {
+    sprite.cursor = canEditActor(actor) ? "pointer" : "default";
+    stylePaletteSprite(sprite, actor, sprite._towConditionId, activeStatuses);
   }
 }
 
-function clearStaggerTimers(token) {
-  const timers = token?.[KEYS.staggerTimers];
-  if (!Array.isArray(timers)) return;
-  for (const timer of timers) clearTimeout(timer);
-  token[KEYS.staggerTimers] = [];
-}
-
-function scheduleStaggerRefresh(token) {
-  if (!token) return;
-
-  const layer = token[KEYS.staggerLayer];
-  if (layer) {
-    clearStaggeredGraphics(token);
-    layer.visible = false;
-    token[KEYS.staggerSignature] = "";
-  }
-
-  clearStaggerTimers(token);
-  if (!Array.isArray(token[KEYS.staggerTimers])) token[KEYS.staggerTimers] = [];
-
-  const timer = setTimeout(() => {
-    applyStaggeredBackground(token);
-  }, STAGGER_REFRESH_DELAY_MS);
-  token[KEYS.staggerTimers].push(timer);
-}
-
-function clearAllStaggerBackgrounds() {
+function clearAllStatusOverlays() {
   forEachSceneToken((token) => {
-    clearStaggerTimers(token);
-    token[KEYS.staggerSignature] = "";
-    removeStaggerLayer(token);
+    for (const sprite of token.effects?.children ?? []) clearStatusIconHandler(sprite);
+    clearStatusPalette(token);
+    restoreDefaultStatusPanel(token);
     clearDeadVisual(token);
   });
 }
 
 function refreshTokenOverlay(tokenObject) {
+  hideDefaultStatusPanel(tokenObject);
+  setupStatusPalette(tokenObject);
   updateWoundControlUI(tokenObject);
   updateResilienceLabel(tokenObject);
   ensureDeadVisual(tokenObject);
 }
 
 function refreshActorOverlays(actor) {
+  queueWoundSyncFromDeadState(actor);
   for (const tokenObject of getActorTokenObjects(actor)) {
     refreshTokenOverlay(tokenObject);
-    scheduleStaggerRefresh(tokenObject);
   }
 }
 
@@ -1466,7 +1689,6 @@ function queueActorOverlayResync(actor) {
 function refreshAllOverlays() {
   forEachSceneToken((token) => {
     refreshTokenOverlay(token);
-    applyStaggeredBackground(token);
   });
 }
 
@@ -1517,7 +1739,10 @@ if (!game[MODULE_KEY]) {
     autoApplyArmed: new Set(),
     actorOverlayResyncTimers: new Map(),
     deadSyncTimers: new Map(),
-    deadSyncInFlight: new Set()
+    deadToWoundSyncTimers: new Map(),
+    deadPresenceByActor: new Map(),
+    deadSyncInFlight: new Set(),
+    statusRemoveInFlight: new Set()
   };
   refreshAllOverlays();
   ui.notifications.info("Overlay enabled: wounds + resilience + status highlights.");
@@ -1535,6 +1760,11 @@ if (!game[MODULE_KEY]) {
     for (const timer of state.deadSyncTimers.values()) clearTimeout(timer);
     state.deadSyncTimers.clear();
   }
+  if (state?.deadToWoundSyncTimers instanceof Map) {
+    for (const timer of state.deadToWoundSyncTimers.values()) clearTimeout(timer);
+    state.deadToWoundSyncTimers.clear();
+  }
+  if (state?.deadPresenceByActor instanceof Map) state.deadPresenceByActor.clear();
   if (state?.deadSyncInFlight instanceof Set) state.deadSyncInFlight.clear();
   if (state?.staggerWaitPatch && typeof foundry.applications?.api?.Dialog?.wait === "function") {
     foundry.applications.api.Dialog.wait = state.staggerWaitPatch.originalWait;
@@ -1543,6 +1773,6 @@ if (!game[MODULE_KEY]) {
 
   clearAllWoundControls();
   clearAllResilienceLabels();
-  clearAllStaggerBackgrounds();
+  clearAllStatusOverlays();
   ui.notifications.info("Overlay disabled.");
 }

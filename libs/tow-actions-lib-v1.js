@@ -330,10 +330,8 @@ function getActorSkills(actor) {
     return skillData && typeof skillData.value !== "undefined";
   });
 
-  const hasDefault = skills.includes(DEFAULT_DEFENCE_SKILL);
-  const ordered = skills.sort((a, b) => getSkillLabel(a).localeCompare(getSkillLabel(b)));
-  if (hasDefault) return [DEFAULT_DEFENCE_SKILL, ...ordered.filter((s) => s !== DEFAULT_DEFENCE_SKILL)];
-  return ordered;
+  // Match NPC token-sheet ordering (alpha by skill key).
+  return skills.sort((a, b) => a.localeCompare(b));
 }
 
 function getActorCharacteristics(actor) {
@@ -358,14 +356,8 @@ function getManualDefenceEntries(actor) {
     target: Number(actor.system?.characteristics?.[characteristic]?.value ?? 0)
   }));
 
-  const prioritizedSkills = skillEntries.sort((a, b) => {
-    if (a.id === DEFAULT_DEFENCE_SKILL && b.id !== DEFAULT_DEFENCE_SKILL) return -1;
-    if (a.id !== DEFAULT_DEFENCE_SKILL && b.id === DEFAULT_DEFENCE_SKILL) return 1;
-    return a.label.localeCompare(b.label);
-  });
-
-  const sortedChars = charEntries.sort((a, b) => a.label.localeCompare(b.label));
-  return [...prioritizedSkills, ...sortedChars];
+  // Keep characteristics in native schema order to match sheet columns.
+  return [...skillEntries, ...charEntries];
 }
 
 function armAutoSubmitSkillDialog(actor, skill) {
