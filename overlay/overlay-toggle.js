@@ -45,6 +45,7 @@ const AUTO_STAGGER_PATCH_MS = 12000;
 const FLOW_CARD_FONT_SIZE = "var(--font-size-16)";
 const FLOW_CARD_CHIP_FONT_SIZE = "var(--font-size-12)";
 const ACTOR_OVERLAY_RESYNC_DELAYS_MS = [50, 180];
+const DEAD_SYNC_DEBOUNCE_MS = 60;
 
 const WOUND_ITEM_TYPE = "wound";
 const STAGGERED_CONDITION = "staggered";
@@ -691,6 +692,89 @@ function getWoundCount(tokenDocument) {
   return itemWounds;
 }
 
+function getActorWoundItemCount(actor) {
+  if (!actor) return 0;
+  const items = actor.items?.contents ?? [];
+  if (Array.isArray(items)) return items.filter((item) => item.type === WOUND_ITEM_TYPE).length;
+  if (Array.isArray(actor.itemTypes?.wound)) return actor.itemTypes.wound.length;
+  return 0;
+}
+
+function getMaxWoundLimit(actor) {
+  if (!actor || actor.type !== "npc") return null;
+  if (actor.system?.type === "minion") return 1;
+  if (!actor.system?.hasThresholds) return null;
+
+  const defeatedThreshold = Number(actor.system?.wounds?.defeated?.threshold ?? NaN);
+  if (!Number.isFinite(defeatedThreshold) || defeatedThreshold <= 0) return null;
+  return defeatedThreshold;
+}
+
+function isAtWoundCap(actor) {
+  const cap = getMaxWoundLimit(actor);
+  if (!Number.isFinite(cap)) return false;
+
+  if (actor.system?.type === "minion") {
+    if (actor.hasCondition?.("dead")) return true;
+  }
+  return getActorWoundItemCount(actor) >= cap;
+}
+
+async function syncNpcDeadFromWounds(actor) {
+  if (!actor || actor.type !== "npc" || !canEditActor(actor)) return;
+  if (actor.system?.type === "minion") return;
+  if (!actor.system?.hasThresholds || typeof actor.system?.thresholdAtWounds !== "function") return;
+  const state = game[MODULE_KEY];
+  if (!state) return;
+  if (!state.deadSyncInFlight) state.deadSyncInFlight = new Set();
+
+  const actorKey = actor.uuid ?? actor.id;
+  if (!actorKey || state.deadSyncInFlight.has(actorKey)) return;
+  state.deadSyncInFlight.add(actorKey);
+
+  try {
+    const woundCount = getActorWoundItemCount(actor);
+    const threshold = actor.system.thresholdAtWounds(woundCount);
+    const shouldBeDead = threshold === "defeated";
+    const hasDead = !!actor.hasCondition?.("dead");
+    if (shouldBeDead === hasDead) return;
+
+    if (shouldBeDead) {
+      await actor.addCondition("dead");
+    } else {
+      try {
+        await actor.removeCondition("dead");
+      } catch (error) {
+        const msg = String(error?.message ?? error ?? "");
+        if (!msg.includes("does not exist")) throw error;
+      }
+    }
+  } finally {
+    state.deadSyncInFlight.delete(actorKey);
+  }
+}
+
+function queueDeadSyncFromWounds(actor) {
+  if (!actor) return;
+  const state = game[MODULE_KEY];
+  if (!state) return;
+  if (!state.deadSyncTimers) state.deadSyncTimers = new Map();
+
+  const actorKey = actor.uuid ?? actor.id;
+  if (!actorKey) return;
+
+  const existingTimer = state.deadSyncTimers.get(actorKey);
+  if (existingTimer) clearTimeout(existingTimer);
+
+  const timer = setTimeout(() => {
+    state.deadSyncTimers.delete(actorKey);
+    void syncNpcDeadFromWounds(actor).catch((error) => {
+      console.error("[overlay-toggle] Failed to sync dead condition from wounds.", error);
+    });
+  }, DEAD_SYNC_DEBOUNCE_MS);
+  state.deadSyncTimers.set(actorKey, timer);
+}
+
 function getResilienceValue(tokenDocument) {
   return tokenDocument?.actor?.system?.resilience?.value ?? null;
 }
@@ -700,6 +784,7 @@ async function addWound(actor) {
     warnNoPermission(actor);
     return;
   }
+  if (isAtWoundCap(actor)) return;
   if (typeof actor.system?.addWound === "function") {
     await actor.system.addWound({ roll: false });
   } else {
@@ -1342,16 +1427,19 @@ function registerHooks() {
       if (item.type !== WOUND_ITEM_TYPE) return;
       refreshActorOverlays(item.parent);
       queueActorOverlayResync(item.parent);
+      queueDeadSyncFromWounds(item.parent);
     }),
     updateItem: Hooks.on("updateItem", (item) => {
       if (item.type !== WOUND_ITEM_TYPE) return;
       refreshActorOverlays(item.parent);
       queueActorOverlayResync(item.parent);
+      queueDeadSyncFromWounds(item.parent);
     }),
     deleteItem: Hooks.on("deleteItem", (item) => {
       if (item.type !== WOUND_ITEM_TYPE) return;
       refreshActorOverlays(item.parent);
       queueActorOverlayResync(item.parent);
+      queueDeadSyncFromWounds(item.parent);
     }),
     createActiveEffect: Hooks.on("createActiveEffect", (effect) => refreshActorOverlays(effect?.parent)),
     updateActiveEffect: Hooks.on("updateActiveEffect", (effect) => refreshActorOverlays(effect?.parent)),
@@ -1376,7 +1464,9 @@ if (!game[MODULE_KEY]) {
     recentAttacks: new Map(),
     recentTargets: new Map(),
     autoApplyArmed: new Set(),
-    actorOverlayResyncTimers: new Map()
+    actorOverlayResyncTimers: new Map(),
+    deadSyncTimers: new Map(),
+    deadSyncInFlight: new Set()
   };
   refreshAllOverlays();
   ui.notifications.info("Overlay enabled: wounds + resilience + status highlights.");
@@ -1390,6 +1480,11 @@ if (!game[MODULE_KEY]) {
     }
     state.actorOverlayResyncTimers.clear();
   }
+  if (state?.deadSyncTimers instanceof Map) {
+    for (const timer of state.deadSyncTimers.values()) clearTimeout(timer);
+    state.deadSyncTimers.clear();
+  }
+  if (state?.deadSyncInFlight instanceof Set) state.deadSyncInFlight.clear();
   if (state?.staggerWaitPatch && typeof foundry.applications?.api?.Dialog?.wait === "function") {
     foundry.applications.api.Dialog.wait = state.staggerWaitPatch.originalWait;
   }
