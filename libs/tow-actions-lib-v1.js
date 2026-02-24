@@ -83,6 +83,55 @@ function getAttackMeta(attack) {
   return `${attackType} | ${rangeLabel} | ${skillLabel} | DMG ${damage}`;
 }
 
+function renderSelectorRowButton({
+  rowClass,
+  dataAttrs = "",
+  label,
+  valueLabel = "",
+  subLabel = "",
+  highlighted = false,
+  compact = false
+} = {}) {
+  const safeLabel = escapeHtml(label);
+  const safeValue = escapeHtml(valueLabel);
+  const safeSubLabel = escapeHtml(subLabel);
+
+  const labelColor = highlighted ? "#2c2412" : "#111111";
+  const subLabelColor = highlighted ? "#4d4121" : "#5f5b4b";
+  const buttonBackground = highlighted ? "#e8ddbe" : "#f2f1e8";
+  const buttonBorder = highlighted ? "#8f7c43" : "#bdb9ab";
+  const buttonShadow = highlighted ? "inset 0 0 0 1px rgba(255,255,255,0.35)" : "none";
+  const accentColor = highlighted ? "#6a5623" : "transparent";
+  const accent = `<span style="width:4px; align-self:stretch; border-radius:2px; background:${accentColor}; flex:0 0 auto;"></span>`;
+
+  const hasSubLabel = safeSubLabel.length > 0;
+  const subtitleMarkup = hasSubLabel
+    ? `<span style="font-size:11px; line-height:1.2; color:${subLabelColor}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${safeSubLabel}</span>`
+    : "";
+
+  const valueMarkup = safeValue
+    ? `<span style="font-size:12px; opacity:0.85; flex:0 0 auto; color:#2f2a1f;">${safeValue}</span>`
+    : "";
+
+  const compactHeight = compact ? "34px" : "";
+  const minHeight = compact ? "34px" : "52px";
+  const padding = compact ? "5px 6px" : "6px";
+
+  return `<button type="button"
+    class="${rowClass}"
+    ${dataAttrs}
+    style="width:100%; box-sizing:border-box; text-align:left; padding:${padding}; min-height:${minHeight}; ${compactHeight ? `height:${compactHeight};` : ""} display:flex; align-items:center; justify-content:space-between; gap:8px; background:${buttonBackground}; border:1px solid ${buttonBorder}; box-shadow:${buttonShadow}; border-radius:3px;">
+    <span style="display:flex; align-items:center; gap:7px; min-width:0; flex:1;">
+      ${accent}
+      <span style="display:flex; flex-direction:column; justify-content:center; min-width:0; gap:1px;">
+        <span style="font-weight:400; color:${labelColor}; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${safeLabel}</span>
+        ${subtitleMarkup}
+      </span>
+    </span>
+    ${valueMarkup}
+  </button>`;
+}
+
 async function waitForChatMessage(messageId, timeoutMs = 3000) {
   if (!messageId) return null;
 
@@ -224,24 +273,31 @@ async function setupAbilityTestWithDamage(actor, ability, { autoRoll = false } =
 
 function renderAttackSelector(actor, attacks) {
   const buttonMarkup = attacks
-    .map((attack) => {
+    .map((attack, index) => {
       const itemId = escapeHtml(attack.id);
-      const itemName = escapeHtml(attack.name);
-      const itemMeta = escapeHtml(getAttackMeta(attack));
-      return `<button type="button"
-        class="attack-btn"
-        data-id="${itemId}"
-        style="text-align:left; padding:6px;">
-        <strong>${itemName}</strong>
-        <div style="font-size:12px; opacity:0.8;">${itemMeta}</div>
-      </button>`;
+      return renderSelectorRowButton({
+        rowClass: "attack-btn",
+        dataAttrs: `data-id="${itemId}"`,
+        label: attack.name,
+        subLabel: getAttackMeta(attack),
+        valueLabel: "",
+        highlighted: index === 0,
+        compact: false
+      });
     })
     .join("");
 
-  const content = `<div style="display:flex; flex-direction:column; gap:6px;">${buttonMarkup}</div>`;
+  const content = `<div style="display:flex; flex-direction:column; min-width:0; border:1px solid #b9b6aa; border-radius:4px; overflow:hidden;">
+    <div style="padding:4px 6px; font-size:12px; font-weight:700; background:#d9d5c7;">Attacks</div>
+    <div style="display:flex; flex-direction:column; gap:4px; padding:6px; overflow-y:auto; overflow-x:hidden; max-height:430px; scrollbar-gutter:stable;">
+      ${buttonMarkup || '<div style="font-size:12px; opacity:0.7;">No attacks</div>'}
+    </div>
+  </div>`;
   const selectorDialog = new Dialog({
     title: `${actor.name} - Weapon Attacks`,
     content,
+    width: 560,
+    height: 560,
     buttons: { close: { label: "Close" } },
     render: (html) => {
       html.find(".attack-btn").on("click", async (event) => {
@@ -392,19 +448,20 @@ async function rollCharacteristic(actor, characteristic) {
 }
 
 function renderDefenceSelector(actor, entries) {
+  const emphasizedSkills = new Set(["defence", "athletics", "endurance"]);
   const renderEntryButton = (entry) => {
       const id = escapeHtml(entry.id);
       const type = escapeHtml(entry.type);
-      const label = escapeHtml(entry.label);
       const value = Number(entry.target ?? 0);
-      return `<button type="button"
-        class="skill-btn"
-        data-type="${type}"
-        data-id="${id}"
-        style="width:100%; box-sizing:border-box; text-align:left; padding:6px; height:34px; display:flex; align-items:center; justify-content:space-between; gap:8px;">
-        <strong style="font-weight:600; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${label}</strong>
-        <span style="font-size:12px; opacity:0.8; flex:0 0 auto;">T${value}</span>
-      </button>`;
+      const shouldEmphasize = entry.type === "skill" && emphasizedSkills.has(String(entry.id).toLowerCase());
+      return renderSelectorRowButton({
+        rowClass: "skill-btn",
+        dataAttrs: `data-type="${type}" data-id="${id}"`,
+        label: entry.label,
+        valueLabel: `T${value}`,
+        highlighted: shouldEmphasize,
+        compact: true
+      });
   };
 
   const characteristicEntries = entries.filter((entry) => entry.type === "characteristic");
@@ -413,7 +470,7 @@ function renderDefenceSelector(actor, entries) {
   const characteristicMarkup = characteristicEntries.map(renderEntryButton).join("");
   const skillMarkup = skillEntries.map(renderEntryButton).join("");
 
-  const content = `<div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; max-height:470px;">
+  const content = `<div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; align-items:start;">
     <div style="display:flex; flex-direction:column; min-width:0; border:1px solid #b9b6aa; border-radius:4px; overflow:hidden;">
       <div style="padding:4px 6px; font-size:12px; font-weight:700; background:#d9d5c7;">Characteristics</div>
       <div style="display:flex; flex-direction:column; gap:4px; padding:6px; overflow-y:auto; overflow-x:hidden; max-height:430px; scrollbar-gutter:stable;">
