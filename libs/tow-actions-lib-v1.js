@@ -199,6 +199,7 @@ async function renderDamageDisplay(message, { damage }) {
   await postSeparateDamageMessage(message, damage);
 }
 
+
 function armDamageAppend(actor, ability) {
   let timeoutId = null;
 
@@ -224,11 +225,9 @@ function armDamageAppend(actor, ability) {
   timeoutId = setTimeout(() => cleanup(hookId), 30000);
 }
 
-function armAutoSubmitAbilityDialog(actor, ability) {
-  Hooks.once("renderAbilityAttackDialog", (app) => {
-    const sameActor = app?.actor?.id === actor.id;
-    const sameAbility = app?.ability?.id === ability.id;
-    if (!sameActor || !sameAbility) return;
+function armAutoSubmitDialog({ hookName, matches, submitErrorMessage }) {
+  Hooks.once(hookName, (app) => {
+    if (!matches(app)) return;
 
     const element = toElement(app?.element);
     if (element) {
@@ -238,7 +237,7 @@ function armAutoSubmitAbilityDialog(actor, ability) {
 
     setTimeout(async () => {
       if (typeof app?.submit !== "function") {
-        console.error("[tow-actions-lib-v1] AbilityAttackDialog.submit() is unavailable.");
+        console.error(`[tow-actions-lib-v1] ${submitErrorMessage}`);
         if (element) {
           element.style.visibility = "";
           element.style.pointerEvents = "";
@@ -247,6 +246,14 @@ function armAutoSubmitAbilityDialog(actor, ability) {
       }
       await app.submit();
     }, 1);
+  });
+}
+
+function armAutoSubmitAbilityDialog(actor, ability) {
+  armAutoSubmitDialog({
+    hookName: "renderAbilityAttackDialog",
+    matches: (app) => app?.actor?.id === actor.id && app?.ability?.id === ability.id,
+    submitErrorMessage: "AbilityAttackDialog.submit() is unavailable."
   });
 }
 
@@ -314,6 +321,7 @@ function renderAttackSelector(actor, attacks) {
   selectorDialog.render(true);
 }
 
+
 function getSkillLabel(skill) {
   return game.oldworld?.config?.skills?.[skill] ?? skill;
 }
@@ -361,29 +369,10 @@ function getManualDefenceEntries(actor) {
 }
 
 function armAutoSubmitSkillDialog(actor, skill) {
-  Hooks.once("renderTestDialog", (app) => {
-    const sameActor = app?.actor?.id === actor.id;
-    const sameSkill = app?.skill === skill;
-    if (!sameActor || !sameSkill) return;
-
-    const element = toElement(app?.element);
-    if (element) {
-      element.style.visibility = "hidden";
-      element.style.pointerEvents = "none";
-    }
-
-    setTimeout(async () => {
-      if (typeof app?.submit !== "function") {
-        console.error("[tow-actions-lib-v1] TestDialog.submit() is unavailable.");
-        if (element) {
-          element.style.visibility = "";
-          element.style.pointerEvents = "";
-        }
-        return;
-      }
-
-      await app.submit();
-    }, 1);
+  armAutoSubmitDialog({
+    hookName: "renderTestDialog",
+    matches: (app) => app?.actor?.id === actor.id && app?.skill === skill,
+    submitErrorMessage: "TestDialog.submit() is unavailable."
   });
 }
 
@@ -503,6 +492,7 @@ function renderDefenceSelector(actor, entries) {
   selectorDialog.render(true);
 }
 
+
 async function attackActor(actor, { manual = false } = {}) {
   if (!actor) return;
   if (!shouldExecuteAttack(actor, { manual })) return;
@@ -574,3 +564,4 @@ game[TOW_ACTIONS_KEY] = {
 };
 
 ui.notifications.info("TOW shared actions loaded.");
+

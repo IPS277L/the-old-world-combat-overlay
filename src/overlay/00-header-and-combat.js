@@ -1,12 +1,75 @@
-// Toggle ATK drag-to-target quick attack (test macro, isolated from overlay-toggle)
-// Drag from source token's ATK label and release over another token to quick-roll first attack.
+// Toggle Overlay (Foundry V13)
+// Combines:
+// 1) Wound controls (W left click add, right click remove)
+// 2) STAG text toggle control
+// 3) RES label above token
+// 4) Status icon backgrounds (yellow staggered, gray dead)
 
-const MODULE_KEY = "towAtkDragTargetToggle";
-const UI_KEY = "_towAtkDragUi";
-const UI_MARKER_KEY = "_towAtkDragUiMarker";
-const UI_TOKEN_ID_KEY = "_towAtkDragTokenId";
-const LIB_MACRO_CANDIDATES = ["tow-actions-lib-v1", "tow-actions-lib"];
+const MODULE_KEY = "towMacroToggleOverlay";
 const PreciseTextClass = foundry.canvas.containers.PreciseText;
+const LIB_MACRO_CANDIDATES = ["tow-actions-lib-v1", "tow-actions-lib"];
+const ACTIONS_RUNTIME_PARTS = [
+  "tow-actions-runtime-part-00-core-v1",
+  "tow-actions-runtime-part-10-attack-flow-v1",
+  "tow-actions-runtime-part-20-defence-flow-v1",
+  "tow-actions-runtime-part-30-api-v1"
+];
+const ACTIONS_RUNTIME_LOADER_CANDIDATES = ["tow-actions-runtime-loader-v1"];
+
+const KEYS = {
+  woundUI: "_towWoundControlUI",
+  woundUiMarker: "_towOverlayWoundUiMarker",
+  woundUiTokenId: "_towOverlayWoundUiTokenId",
+  nameLabel: "_towNameLabel",
+  nameLabelMarker: "_towOverlayNameLabelMarker",
+  nameLabelTokenId: "_towOverlayNameLabelTokenId",
+  resilienceLabel: "_towResilienceLabel",
+  defaultEffectsVisible: "_towDefaultEffectsVisible",
+  statusPaletteLayer: "_towStatusPaletteLayer",
+  statusPaletteMarker: "_towOverlayStatusPaletteMarker",
+  statusPaletteTokenId: "_towOverlayStatusPaletteTokenId",
+  statusPaletteMetrics: "_towStatusPaletteMetrics",
+  deadVisualState: "_towDeadVisualState",
+  statusIconHandler: "_towStatusIconHandler",
+  statusIconTooltipOverHandler: "_towStatusIconTooltipOverHandler",
+  statusIconTooltipMoveHandler: "_towStatusIconTooltipMoveHandler",
+  statusIconTooltipOutHandler: "_towStatusIconTooltipOutHandler",
+  tokenInteractiveChildrenOriginal: "_towTokenInteractiveChildrenOriginal",
+  tokenHitAreaOriginal: "_towTokenHitAreaOriginal",
+  coreTooltipVisible: "_towCoreTooltipVisible",
+  coreTooltipRenderable: "_towCoreTooltipRenderable",
+  coreNameplateVisible: "_towCoreNameplateVisible",
+  coreNameplateRenderable: "_towCoreNameplateRenderable",
+  coreBorderVisible: "_towCoreBorderVisible",
+  coreBorderAlpha: "_towCoreBorderAlpha",
+  layoutBorder: "_towLayoutBorder",
+  layoutBounds: "_towLayoutBounds"
+};
+
+const STATUS_PALETTE_ICON_SIZE = 20;
+const STATUS_PALETTE_ICON_GAP = 2;
+const STATUS_PALETTE_ROWS = 2;
+const TOKEN_CONTROL_PAD = 6;
+const NAME_TYPE_STACK_OVERLAP_PX = 13;
+const NAME_TYPE_TO_TOKEN_OFFSET_PX = 6;
+const STATUS_PALETTE_TOKEN_PAD = TOKEN_CONTROL_PAD;
+const STATUS_PALETTE_INACTIVE_TINT = 0x7A7A7A;
+const STATUS_PALETTE_ACTIVE_TINT = 0xFFFFFF;
+const STATUS_PALETTE_STAGGERED_RING = 0xFFD54A;
+const STATUS_PALETTE_DEAD_RING = 0xFFFFFF;
+const STATUS_PALETTE_SPECIAL_BG_PAD = 1;
+const STATUS_PALETTE_SPECIAL_BG_RADIUS = 3;
+const STATUS_PALETTE_SPECIAL_BG_OUTLINE = 0x171717;
+const STATUS_PALETTE_SPECIAL_BG_OUTLINE_WIDTH = 1;
+const STATUS_PALETTE_SPECIAL_BG_OUTLINE_ALPHA = 0.72;
+const STATUS_PALETTE_SPECIAL_BG_STAGGERED_ALPHA = 0.58;
+const STATUS_PALETTE_SPECIAL_BG_DEAD_ALPHA = 0.62;
+const LAYOUT_BORDER_COLOR = 0xE39A1A;
+const LAYOUT_BORDER_ALPHA = 1;
+const LAYOUT_BORDER_WIDTH = 2;
+const LAYOUT_BORDER_RADIUS = 6;
+const OVERLAY_FONT_SIZE = 22;
+const DRAG_START_THRESHOLD_PX = 8;
 const DRAG_LINE_OUTER_COLOR = 0x1A0909;
 const DRAG_LINE_OUTER_ALPHA = 0.85;
 const DRAG_LINE_OUTER_WIDTH = 7;
@@ -24,38 +87,93 @@ const OPPOSED_LINK_WAIT_MS = 700;
 const AUTO_STAGGER_PATCH_MS = 12000;
 const FLOW_CARD_FONT_SIZE = "var(--font-size-16)";
 const FLOW_CARD_CHIP_FONT_SIZE = "var(--font-size-12)";
+const ACTOR_OVERLAY_RESYNC_DELAYS_MS = [50, 180];
+const DEAD_SYNC_DEBOUNCE_MS = 60;
+const DEAD_TO_WOUND_SYNC_DEBOUNCE_MS = 80;
+const STATUS_TOOLTIP_FONT_SIZE = 14;
+const STATUS_TOOLTIP_MAX_WIDTH = 260;
+const STATUS_TOOLTIP_PAD_X = 8;
+const STATUS_TOOLTIP_PAD_Y = 6;
+const STATUS_TOOLTIP_OFFSET_X = 12;
+const STATUS_TOOLTIP_OFFSET_Y = 12;
+const STATUS_TOOLTIP_BG_COLOR = 0x0F0C09;
+const STATUS_TOOLTIP_BG_ALPHA = 0.94;
+const STATUS_TOOLTIP_BORDER_COLOR = 0xC18B2C;
+const STATUS_TOOLTIP_BORDER_ALPHA = 0.9;
+const STATUS_TOOLTIP_DOM_CLASS = "tow-overlay-status-tooltip";
+const OVERLAY_TEXT_RESOLUTION_MIN = 3;
+const OVERLAY_TEXT_RESOLUTION_MAX = 8;
+const OVERLAY_CONTROL_ICON_TINT = 0xFFF4D8;
+const OVERLAY_CONTROL_ICON_OUTLINE_COLOR = 0x2A2620;
+const OVERLAY_CONTROL_ICON_OUTLINE_THICKNESS = 1.4;
+const OVERLAY_CONTROL_ICON_OUTLINE_ALPHA = 0.58;
 
-function getLabelStyle() {
-  const style = CONFIG.canvasTextStyle?.clone?.() ?? new PIXI.TextStyle();
-  style.fontFamily = "CaslonPro";
-  style.fontSize = 22;
-  style.fill = "#f5e8c8";
-  style.stroke = "#111111";
-  style.strokeThickness = 4;
-  style.dropShadow = false;
-  style.align = "right";
-  return style;
+const WOUND_ITEM_TYPE = "wound";
+const ICON_SRC_ATK = "icons/svg/sword.svg";
+const ICON_SRC_DEF = "icons/svg/shield.svg";
+const ICON_SRC_WOUND = "icons/svg/blood.svg";
+const ICON_SRC_RES = "icons/svg/statue.svg";
+
+function canEditActor(actor) {
+  return actor?.isOwner === true;
 }
 
-async function ensureTowActions() {
-  const hasApi = typeof game.towActions?.attackActor === "function";
-  if (hasApi) return true;
+function warnNoPermission(actor) {
+  ui.notifications.warn(`No permission to edit ${actor?.name ?? "actor"}.`);
+}
 
-  const libMacro = LIB_MACRO_CANDIDATES.map((name) => game.macros.getName(name)).find(Boolean);
-  if (!libMacro) {
-    ui.notifications.error(`Shared actions macro not found. Tried: ${LIB_MACRO_CANDIDATES.join(", ")}`);
-    return false;
+function getActorFromToken(tokenObject) {
+  return tokenObject?.document?.actor ?? null;
+}
+
+function asTokenObject(tokenLike) {
+  return tokenLike?.object ?? tokenLike ?? null;
+}
+
+function forEachSceneToken(callback) {
+  for (const token of canvas.tokens.placeables) callback(token);
+}
+
+function forEachActorToken(actor, callback) {
+  if (!actor) return;
+  for (const token of actor.getActiveTokens(true)) {
+    const tokenObject = asTokenObject(token);
+    if (tokenObject) callback(tokenObject);
+  }
+}
+
+function getActorTokenObjects(actor) {
+  const seen = new Set();
+  const tokens = [];
+  forEachActorToken(actor, (tokenObject) => {
+    if (!tokenObject?.id || seen.has(tokenObject.id)) return;
+    seen.add(tokenObject.id);
+    tokens.push(tokenObject);
+  });
+
+  const syntheticToken = asTokenObject(actor?.token);
+  if (syntheticToken?.id && !seen.has(syntheticToken.id)) {
+    seen.add(syntheticToken.id);
+    tokens.push(syntheticToken);
   }
 
-  try {
-    await libMacro.execute();
-  } catch (error) {
-    console.error("[attack-drag-target-toggle] Failed to execute shared actions macro.", error);
-    ui.notifications.error("Failed to load shared actions macro.");
-    return false;
-  }
+  return tokens;
+}
 
-  return typeof game.towActions?.attackActor === "function";
+function preventPointerDefault(event) {
+  event.stopPropagation();
+  event.nativeEvent?.preventDefault?.();
+}
+
+function getMouseButton(event) {
+  return event.button ?? event.data?.button ?? event.nativeEvent?.button ?? 0;
+}
+
+function isShiftModifier(event) {
+  if (event?.shiftKey === true) return true;
+  if (event?.data?.originalEvent?.shiftKey === true) return true;
+  if (event?.nativeEvent?.shiftKey === true) return true;
+  return game.keyboard?.isModifierActive?.(KeyboardManager.MODIFIER_KEYS.SHIFT) === true;
 }
 
 function getWorldPoint(event) {
@@ -66,11 +184,38 @@ function getWorldPoint(event) {
   return canvas.mousePosition ?? null;
 }
 
-function isShiftModifier(event) {
-  if (event?.shiftKey === true) return true;
-  if (event?.data?.originalEvent?.shiftKey === true) return true;
-  if (event?.nativeEvent?.shiftKey === true) return true;
-  return game.keyboard?.isModifierActive?.(KeyboardManager.MODIFIER_KEYS.SHIFT) === true;
+function getScreenPoint(event) {
+  return event?.global ?? event?.data?.global ?? null;
+}
+
+function getTooltipPointFromEvent(event) {
+  return getScreenPoint(event) ?? getWorldPoint(event);
+}
+
+function bindTooltipHandlers(displayObject, getTooltipData, keyStore = null) {
+  if (!displayObject || typeof getTooltipData !== "function") return null;
+
+  const onShow = (event) => {
+    const point = getTooltipPointFromEvent(event);
+    if (!point) return;
+    const data = getTooltipData(event) ?? {};
+    const title = data.title ?? data.name ?? "";
+    const description = data.description ?? "No description.";
+    if (!title) return;
+    showOverlayTooltip(title, description, point);
+  };
+  const onHide = () => hideStatusTooltip();
+
+  displayObject.on("pointerover", onShow);
+  displayObject.on("pointermove", onShow);
+  displayObject.on("pointerout", onHide);
+  displayObject.on("pointerupoutside", onHide);
+  displayObject.on("pointercancel", onHide);
+
+  if (keyStore?.over) displayObject[keyStore.over] = onShow;
+  if (keyStore?.move) displayObject[keyStore.move] = onShow;
+  if (keyStore?.out) displayObject[keyStore.out] = onHide;
+  return { onShow, onHide };
 }
 
 function tokenAtPoint(point, { excludeTokenId } = {}) {
@@ -107,7 +252,6 @@ function setSingleTarget(token) {
     return;
   }
 
-  // Single call to avoid duplicate target update side effects.
   token.setTarget(true, { releaseOthers: true, groupSelection: false });
 }
 
@@ -122,55 +266,162 @@ function shouldRunDragAttack(sourceToken, targetToken) {
   if (now - last < ATTACK_DEDUPE_WINDOW_MS) return false;
 
   state.recentAttacks.set(key, now);
-
-  // Keep map small over time.
   if (state.recentAttacks.size > 100) {
     for (const [mapKey, ts] of state.recentAttacks.entries()) {
       if (now - Number(ts) > ATTACK_DEDUPE_WINDOW_MS * 3) state.recentAttacks.delete(mapKey);
     }
   }
-
   return true;
 }
 
-function armDefaultStaggerChoiceWound(actors, durationMs = AUTO_STAGGER_PATCH_MS) {
+function createDragLine() {
+  const line = new PIXI.Graphics();
+  line.eventMode = "none";
+  canvas.tokens.addChild(line);
+  return line;
+}
+
+function drawDragLine(line, fromPoint, toPoint) {
+  if (!line || !fromPoint || !toPoint) return;
+
+  const dx = toPoint.x - fromPoint.x;
+  const dy = toPoint.y - fromPoint.y;
+  const angle = Math.atan2(dy, dx);
+  const leftAngle = angle + (Math.PI * 5 / 6);
+  const rightAngle = angle - (Math.PI * 5 / 6);
+  const leftX = toPoint.x + (Math.cos(leftAngle) * DRAG_ARROW_SIZE);
+  const leftY = toPoint.y + (Math.sin(leftAngle) * DRAG_ARROW_SIZE);
+  const rightX = toPoint.x + (Math.cos(rightAngle) * DRAG_ARROW_SIZE);
+  const rightY = toPoint.y + (Math.sin(rightAngle) * DRAG_ARROW_SIZE);
+
+  line.clear();
+  line.lineStyle({
+    width: DRAG_LINE_OUTER_WIDTH,
+    color: DRAG_LINE_OUTER_COLOR,
+    alpha: DRAG_LINE_OUTER_ALPHA,
+    cap: "round",
+    join: "round"
+  });
+  line.moveTo(fromPoint.x, fromPoint.y);
+  line.lineTo(toPoint.x, toPoint.y);
+  line.moveTo(toPoint.x, toPoint.y);
+  line.lineTo(leftX, leftY);
+  line.moveTo(toPoint.x, toPoint.y);
+  line.lineTo(rightX, rightY);
+
+  line.lineStyle({
+    width: DRAG_LINE_INNER_WIDTH,
+    color: DRAG_LINE_INNER_COLOR,
+    alpha: DRAG_LINE_INNER_ALPHA,
+    cap: "round",
+    join: "round"
+  });
+  line.moveTo(fromPoint.x, fromPoint.y);
+  line.lineTo(toPoint.x, toPoint.y);
+  line.moveTo(toPoint.x, toPoint.y);
+  line.lineTo(leftX, leftY);
+  line.moveTo(toPoint.x, toPoint.y);
+  line.lineTo(rightX, rightY);
+
+  line.lineStyle({
+    width: DRAG_ENDPOINT_RING_WIDTH + 1,
+    color: DRAG_LINE_OUTER_COLOR,
+    alpha: DRAG_LINE_OUTER_ALPHA
+  });
+  line.beginFill(DRAG_LINE_INNER_COLOR, DRAG_LINE_INNER_ALPHA);
+  line.drawCircle(fromPoint.x, fromPoint.y, DRAG_ENDPOINT_OUTER_RADIUS);
+  line.endFill();
+}
+
+function clearDragLine(line) {
+  if (!line) return;
+  line.parent?.removeChild(line);
+  line.destroy();
+}
+
+async function executeFirstMacroByNameCandidates(candidates) {
+  const macro = candidates
+    .map((name) => game.macros.getName(name))
+    .find(Boolean);
+  if (!macro) return false;
+  await macro.execute();
+  return true;
+}
+
+async function ensureTowActionsRuntime() {
+  for (const macroName of ACTIONS_RUNTIME_PARTS) {
+    const macro = game.macros.getName(macroName);
+    if (!macro) return false;
+    await macro.execute();
+  }
+  return executeFirstMacroByNameCandidates(ACTIONS_RUNTIME_LOADER_CANDIDATES);
+}
+
+async function ensureTowActions() {
+  const hasApi = typeof game.towActions?.attackActor === "function" &&
+    typeof game.towActions?.defenceActor === "function" &&
+    typeof game.towActions?.isShiftHeld === "function";
+  if (hasApi) return true;
+
+  try {
+    await ensureTowActionsRuntime();
+  } catch (error) {
+    console.error("[overlay-toggle] Failed to execute actions runtime macros.", error);
+  }
+
+  let loaded = typeof game.towActions?.attackActor === "function" &&
+    typeof game.towActions?.defenceActor === "function" &&
+    typeof game.towActions?.isShiftHeld === "function";
+  if (loaded) return true;
+
+  try {
+    const legacyLoaded = await executeFirstMacroByNameCandidates(LIB_MACRO_CANDIDATES);
+    if (!legacyLoaded) {
+      const attempted = [...ACTIONS_RUNTIME_PARTS, ...ACTIONS_RUNTIME_LOADER_CANDIDATES, ...LIB_MACRO_CANDIDATES];
+      ui.notifications.error(`Shared actions macro not found. Tried: ${attempted.join(", ")}`);
+      return false;
+    }
+  } catch (error) {
+    console.error("[overlay-toggle] Failed to execute shared actions macro.", error);
+    ui.notifications.error("Failed to load shared actions macro.");
+    return false;
+  }
+
+  loaded = typeof game.towActions?.attackActor === "function" &&
+    typeof game.towActions?.defenceActor === "function" &&
+    typeof game.towActions?.isShiftHeld === "function";
+  if (!loaded) {
+    ui.notifications.error("Shared actions loaded, but ATK/DEF API is unavailable.");
+  }
+  return loaded;
+}
+
+function armDefaultStaggerChoiceWound(durationMs = AUTO_STAGGER_PATCH_MS) {
   const state = game[MODULE_KEY];
   const DialogApi = foundry.applications?.api?.Dialog;
-  if (!state || typeof DialogApi?.wait !== "function") {
-    return () => {};
-  }
+  if (!state || typeof DialogApi?.wait !== "function") return () => {};
 
   if (!state.staggerWaitPatch) {
     const originalWait = DialogApi.wait.bind(DialogApi);
-    state.staggerWaitPatch = {
-      originalWait,
-      refs: 0
-    };
+    state.staggerWaitPatch = { originalWait, refs: 0 };
 
     DialogApi.wait = async (config, options) => {
       const title = String(config?.window?.title ?? "");
       const content = String(config?.content ?? "");
-
       const actions = Array.isArray(config?.buttons)
         ? config.buttons.map((b) => String(b?.action ?? ""))
         : Object.values(config?.buttons ?? {}).map((b) => String(b?.action ?? ""));
-
       const hasStaggerChoices = actions.includes("wound")
         && (actions.includes("prone") || actions.includes("give"));
-
-      const lowerTitle = title.toLowerCase();
-      const lowerContent = content.toLowerCase();
-      const likelyStaggerText = lowerTitle.includes("stagger")
-        || lowerContent.includes("stagger")
-        || lowerContent.includes("choose from the following options");
-
+      const likelyStaggerText = title.toLowerCase().includes("stagger")
+        || content.toLowerCase().includes("stagger")
+        || content.toLowerCase().includes("choose from the following options");
       if (hasStaggerChoices || likelyStaggerText) return "wound";
       return state.staggerWaitPatch.originalWait(config, options);
     };
   }
 
   state.staggerWaitPatch.refs += 1;
-
   let restored = false;
   const restore = () => {
     if (restored) return;
@@ -196,32 +447,31 @@ function armAutoDefenceForOpposed(sourceToken, targetToken, { sourceBeforeState 
   let timeoutId = null;
   const cleanup = (hookId) => {
     Hooks.off("createChatMessage", hookId);
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-      timeoutId = null;
-    }
+    if (timeoutId) clearTimeout(timeoutId);
+    timeoutId = null;
   };
 
   const hookId = Hooks.on("createChatMessage", async (message) => {
     if (message?.type !== "opposed") return;
-    const defenderTokenId = message.system?.defender?.token;
-    if (defenderTokenId !== targetToken.id) return;
+    if (message.system?.defender?.token !== targetToken.id) return;
 
     const attackerMessage = game.messages.get(message.system?.attackerMessage);
     const attackerActorUuid = attackerMessage?.system?.test?.actor;
     if (attackerActorUuid && attackerActorUuid !== sourceToken.actor.uuid) return;
 
+    const state = game[MODULE_KEY];
+    if (state) {
+      if (!state.autoDefenceHandled) state.autoDefenceHandled = new Set();
+      if (state.autoDefenceHandled.has(message.id)) return;
+      state.autoDefenceHandled.add(message.id);
+    }
+
     cleanup(hookId);
+    if (!(await ensureTowActions())) return;
 
-    const ready = await ensureTowActions();
-    if (!ready) return;
-
-    // Race guard: defender must have this opposed message registered before rolling defence.
-    // Otherwise defence test may not bind as a response.
     const started = Date.now();
     while (Date.now() - started < OPPOSED_LINK_WAIT_MS) {
-      const opposedId = targetToken.actor.system?.opposed?.id;
-      if (opposedId === message.id) break;
+      if (targetToken.actor.system?.opposed?.id === message.id) break;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
@@ -237,7 +487,6 @@ function armAutoDefenceForOpposed(sourceToken, targetToken, { sourceBeforeState 
 
 function armAutoApplyDamageForOpposed(opposedMessage, { sourceActor = null, sourceBeforeState = null } = {}) {
   if (!opposedMessage?.id) return;
-
   const state = game[MODULE_KEY];
   if (state) {
     if (!state.autoApplyArmed) state.autoApplyArmed = new Set();
@@ -245,21 +494,20 @@ function armAutoApplyDamageForOpposed(opposedMessage, { sourceActor = null, sour
     state.autoApplyArmed.add(opposedMessage.id);
   }
 
-  let applying = false;
-  let separatorPosted = false;
-
   const cleanup = () => {
-    if (state?.autoApplyArmed) state.autoApplyArmed.delete(opposedMessage.id);
+    state?.autoApplyArmed?.delete(opposedMessage.id);
+    state?.autoDefenceHandled?.delete(opposedMessage.id);
   };
-
-  const postSeparatorOnce = async (opposed) => {
-    if (separatorPosted) return;
-    separatorPosted = true;
-    const sourceStatusHints = await deriveSourceStatusHints(sourceActor, sourceBeforeState);
-    await postFlowSeparatorCard(opposed, { sourceStatusHints, targetStatusHints: [] });
-  };
-
   void (async () => {
+    let applying = false;
+    let separatorPosted = false;
+    const postSeparatorOnce = async (opposed) => {
+      if (separatorPosted) return;
+      separatorPosted = true;
+      const sourceStatusHints = await deriveSourceStatusHints(sourceActor, sourceBeforeState);
+      await postFlowSeparatorCard(opposed, { sourceStatusHints, targetStatusHints: [] });
+    };
+
     const started = Date.now();
     while (Date.now() - started < AUTO_APPLY_WAIT_MS) {
       const message = game.messages.get(opposedMessage.id);
@@ -272,7 +520,6 @@ function armAutoApplyDamageForOpposed(opposedMessage, { sourceActor = null, sour
       const computed = opposed.result?.computed === true;
       const hasDamage = typeof opposed.result?.damage !== "undefined" && opposed.result?.damage !== null;
       const alreadyApplied = opposed.result?.damage?.applied === true;
-
       if (!computed) {
         await new Promise((resolve) => setTimeout(resolve, 100));
         continue;
@@ -284,11 +531,7 @@ function armAutoApplyDamageForOpposed(opposedMessage, { sourceActor = null, sour
       }
 
       const defenderActor = ChatMessage.getSpeakerActor(opposed.defender);
-      if (!defenderActor?.isOwner) {
-        await postSeparatorOnce(opposed);
-        break;
-      }
-      if (applying) {
+      if (!defenderActor?.isOwner || applying) {
         await postSeparatorOnce(opposed);
         break;
       }
@@ -301,7 +544,6 @@ function armAutoApplyDamageForOpposed(opposedMessage, { sourceActor = null, sour
         item: opposed.attackerTest?.item,
         test: opposed.attackerMessage?.system?.test
       });
-      // Some status effects (e.g. dead from wound threshold scripts) can land a tick later.
       const afterState = await captureSettledActorState(defenderActor, beforeState, 700);
       const targetStatusHints = deriveAppliedStatusLabels(beforeState, afterState);
       const sourceStatusHints = await deriveSourceStatusHints(sourceActor, sourceBeforeState);
@@ -311,9 +553,44 @@ function armAutoApplyDamageForOpposed(opposedMessage, { sourceActor = null, sour
       }
       break;
     }
-
     cleanup();
   })();
+}
+
+async function applyDamageWithWoundsFallback(defenderActor, damageValue, context) {
+  const system = defenderActor?.system;
+  if (!system || typeof system.applyDamage !== "function") return;
+
+  const originalAddWound = (typeof system.addWound === "function") ? system.addWound.bind(system) : null;
+  if (!originalAddWound) {
+    await system.applyDamage(damageValue, context);
+    return;
+  }
+
+  system.addWound = async function wrappedAddWound(options = {}) {
+    const tableId = game.settings.get("whtow", "tableSettings")?.wounds;
+    const hasTable = !!(tableId && game.tables.get(tableId));
+
+    if (!hasTable) {
+      // Keep system wound/death scripts; only bypass table rolling.
+      return originalAddWound({ ...options, roll: false });
+    }
+    try {
+      return await originalAddWound(options);
+    } catch (error) {
+      const message = String(error?.message ?? error ?? "");
+      if (message.includes("No table found for wounds")) {
+        return originalAddWound({ ...options, roll: false });
+      }
+      throw error;
+    }
+  };
+
+  try {
+    await system.applyDamage(damageValue, context);
+  } finally {
+    system.addWound = originalAddWound;
+  }
 }
 
 function snapshotActorState(actor) {
@@ -338,7 +615,6 @@ async function captureSettledActorState(actor, baselineState, settleMs = 700) {
     const sameWounds = current.wounds === last.wounds;
     const sameStatuses = current.statuses.size === last.statuses.size
       && Array.from(current.statuses).every((s) => last.statuses.has(s));
-
     if (sameWounds && sameStatuses) {
       stableFor += 80;
       if (stableFor >= 160) return current;
@@ -377,7 +653,6 @@ function deriveAppliedStatusLabels(before, after) {
       ?? statusId;
     add(label);
   }
-
   return labels;
 }
 
@@ -423,8 +698,7 @@ async function postFlowSeparatorCard(opposed, { sourceStatusHints = [], targetSt
   if (damageMessageKey.includes("SuffersFault")) pushStatus("Fault");
 
   const effectStatuses = Array.isArray(opposed?.attackerTest?.damageEffects)
-    ? opposed.attackerTest.damageEffects
-        .flatMap((effect) => Array.from(effect?.statuses ?? []))
+    ? opposed.attackerTest.damageEffects.flatMap((effect) => Array.from(effect?.statuses ?? []))
     : [];
   for (const status of effectStatuses) {
     const key = String(status ?? "");
@@ -437,8 +711,6 @@ async function postFlowSeparatorCard(opposed, { sourceStatusHints = [], targetSt
   for (const label of targetStatusHints) pushStatus(label);
   const targetStatusLabels = [...statusLabels];
   const sourceStatusLabels = Array.from(new Set((sourceStatusHints ?? []).filter(Boolean)));
-  const targetStatusText = targetStatusLabels.length ? targetStatusLabels.join(", ") : "None";
-  const sourceStatusText = sourceStatusLabels.length ? sourceStatusLabels.join(", ") : "None";
 
   const outcomeColor = outcome === "success"
     ? "#2e7d32"
@@ -522,315 +794,4 @@ async function postFlowSeparatorCard(opposed, { sourceStatusHints = [], targetSt
     content,
     speaker: { alias: "Combat Flow" }
   });
-}
-
-async function applyDamageWithWoundsFallback(defenderActor, damageValue, context) {
-  const system = defenderActor?.system;
-  if (!system || typeof system.applyDamage !== "function") return;
-
-  const originalAddWound = (typeof system.addWound === "function") ? system.addWound.bind(system) : null;
-  if (!originalAddWound) {
-    await system.applyDamage(damageValue, context);
-    return;
-  }
-
-  system.addWound = async function wrappedAddWound(options = {}) {
-    const beforeCount = Number(this.parent?.itemTypes?.wound?.length ?? 0);
-    const tableId = game.settings.get("whtow", "tableSettings")?.wounds;
-    const hasTable = !!(tableId && game.tables.get(tableId));
-
-    const fallbackGenericWound = async () => {
-      const afterCount = Number(this.parent?.itemTypes?.wound?.length ?? 0);
-      if (afterCount > beforeCount) return null;
-      ui.notifications.warn("Wounds table missing. Applied generic Wound.");
-      return this.parent.createEmbeddedDocuments("Item", [{ type: "wound", name: "Wound" }]);
-    };
-
-    // Keep system wound/death scripts, just skip table roll path.
-    if (!hasTable) {
-      try {
-        return await originalAddWound({ ...options, roll: false });
-      } catch (error) {
-        return fallbackGenericWound();
-      }
-    }
-
-    try {
-      const result = await originalAddWound(options);
-      return result;
-    } catch (error) {
-      const message = String(error?.message ?? error ?? "");
-      if (message.includes("No table found for wounds")) {
-        console.warn("[attack-drag-target-toggle] Wounds table missing, using generic wound fallback.");
-        return fallbackGenericWound();
-      }
-      throw error;
-    }
-  };
-
-  try {
-    await system.applyDamage(damageValue, context);
-  } finally {
-    system.addWound = originalAddWound;
-  }
-}
-
-function createDragLine() {
-  const line = new PIXI.Graphics();
-  line.eventMode = "none";
-  canvas.tokens.addChild(line);
-  return line;
-}
-
-function drawDragLine(line, fromPoint, toPoint) {
-  if (!line || !fromPoint || !toPoint) return;
-
-  const dx = toPoint.x - fromPoint.x;
-  const dy = toPoint.y - fromPoint.y;
-  const angle = Math.atan2(dy, dx);
-  const leftAngle = angle + (Math.PI * 5 / 6);
-  const rightAngle = angle - (Math.PI * 5 / 6);
-  const leftX = toPoint.x + (Math.cos(leftAngle) * DRAG_ARROW_SIZE);
-  const leftY = toPoint.y + (Math.sin(leftAngle) * DRAG_ARROW_SIZE);
-  const rightX = toPoint.x + (Math.cos(rightAngle) * DRAG_ARROW_SIZE);
-  const rightY = toPoint.y + (Math.sin(rightAngle) * DRAG_ARROW_SIZE);
-
-  line.clear();
-
-  // Outline pass keeps the line legible on busy maps and token art.
-  line.lineStyle({
-    width: DRAG_LINE_OUTER_WIDTH,
-    color: DRAG_LINE_OUTER_COLOR,
-    alpha: DRAG_LINE_OUTER_ALPHA,
-    cap: "round",
-    join: "round"
-  });
-  line.moveTo(fromPoint.x, fromPoint.y);
-  line.lineTo(toPoint.x, toPoint.y);
-  line.moveTo(toPoint.x, toPoint.y);
-  line.lineTo(leftX, leftY);
-  line.moveTo(toPoint.x, toPoint.y);
-  line.lineTo(rightX, rightY);
-
-  line.lineStyle({
-    width: DRAG_LINE_INNER_WIDTH,
-    color: DRAG_LINE_INNER_COLOR,
-    alpha: DRAG_LINE_INNER_ALPHA,
-    cap: "round",
-    join: "round"
-  });
-  line.moveTo(fromPoint.x, fromPoint.y);
-  line.lineTo(toPoint.x, toPoint.y);
-  line.moveTo(toPoint.x, toPoint.y);
-  line.lineTo(leftX, leftY);
-  line.moveTo(toPoint.x, toPoint.y);
-  line.lineTo(rightX, rightY);
-
-  // Source marker: outlined ring + inner core, clearer than a flat filled dot.
-  line.lineStyle({
-    width: DRAG_ENDPOINT_RING_WIDTH + 1,
-    color: DRAG_LINE_OUTER_COLOR,
-    alpha: DRAG_LINE_OUTER_ALPHA
-  });
-  line.beginFill(DRAG_LINE_INNER_COLOR, DRAG_LINE_INNER_ALPHA);
-  line.drawCircle(fromPoint.x, fromPoint.y, DRAG_ENDPOINT_OUTER_RADIUS);
-  line.endFill();
-
-}
-
-function clearDragLine(line) {
-  if (!line) return;
-  line.parent?.removeChild(line);
-  line.destroy();
-}
-
-function createAtkUi(tokenObject) {
-  if (!tokenObject) return null;
-
-  // Defensive cleanup: if a stale UI for this token exists on canvas root, remove it first.
-  for (const child of canvas.tokens.children ?? []) {
-    if (child?.[UI_MARKER_KEY] === true && child?.[UI_TOKEN_ID_KEY] === tokenObject.id) {
-      child.parent?.removeChild(child);
-      child.destroy({ children: true });
-    }
-  }
-
-  const container = new PIXI.Container();
-  container.eventMode = "passive";
-  container.interactiveChildren = true;
-  container[UI_MARKER_KEY] = true;
-  container[UI_TOKEN_ID_KEY] = tokenObject.id;
-
-  const text = new PreciseTextClass("ATK", getLabelStyle());
-  text.anchor.set(1, 0.5);
-  text.eventMode = "none";
-
-  const hitBox = new PIXI.Graphics();
-  hitBox.eventMode = "static";
-  hitBox.interactive = true;
-  hitBox.buttonMode = true;
-  hitBox.cursor = "grab";
-
-  hitBox.on("pointerdown", (event) => {
-    if ((event.button ?? event.data?.button ?? event.nativeEvent?.button ?? 0) !== 0) return;
-    event.stopPropagation();
-    event.nativeEvent?.preventDefault?.();
-
-    hitBox.cursor = "grabbing";
-    const sourceToken = tokenObject;
-    const origin = {
-      x: sourceToken.x + (sourceToken.w / 2),
-      y: sourceToken.y + (sourceToken.h / 2)
-    };
-    const dragLine = createDragLine();
-    const startPoint = getWorldPoint(event) ?? origin;
-    drawDragLine(dragLine, origin, startPoint);
-
-    const onDragMove = (moveEvent) => {
-      const point = getWorldPoint(moveEvent);
-      if (!point) return;
-      drawDragLine(dragLine, origin, point);
-    };
-
-    let dragFinished = false;
-
-    const cleanupDrag = () => {
-      canvas.stage.off("pointermove", onDragMove);
-      canvas.stage.off("pointerup", finishDrag);
-      canvas.stage.off("pointerupoutside", finishDrag);
-      clearDragLine(dragLine);
-      hitBox.cursor = "grab";
-    };
-
-    const finishDrag = async (upEvent) => {
-      if (dragFinished) return;
-      dragFinished = true;
-      cleanupDrag();
-      const point = getWorldPoint(upEvent);
-      const target = tokenAtPoint(point, { excludeTokenId: sourceToken.id });
-      if (!target) return;
-      if (!shouldRunDragAttack(sourceToken, target)) return;
-
-      const ready = await ensureTowActions();
-      if (!ready) return;
-
-      const shiftManual = isShiftModifier(upEvent);
-      setSingleTarget(target);
-
-      if (shiftManual) {
-        // Manual chain: let user choose attack/safety and subsequent damage/stagger options.
-        await game.towActions.attackActor(sourceToken.actor, { manual: true });
-        return;
-      }
-
-      const restoreStaggerPrompt = armDefaultStaggerChoiceWound(
-        [sourceToken.actor, target.actor],
-        AUTO_STAGGER_PATCH_MS
-      );
-
-      const sourceBeforeState = snapshotActorState(sourceToken.actor);
-      armAutoDefenceForOpposed(sourceToken, target, { sourceBeforeState });
-      try {
-        await game.towActions.attackActor(sourceToken.actor, { manual: false });
-      } finally {
-        // Leave patched briefly for defence/apply-damage chain, then restore.
-        setTimeout(() => restoreStaggerPrompt(), AUTO_APPLY_WAIT_MS);
-      }
-    };
-
-    canvas.stage.on("pointermove", onDragMove);
-    canvas.stage.on("pointerup", finishDrag);
-    canvas.stage.on("pointerupoutside", finishDrag);
-  });
-
-  hitBox.on("contextmenu", (event) => {
-    event.stopPropagation();
-    event.nativeEvent?.preventDefault?.();
-  });
-
-  container.addChild(hitBox);
-  container.addChild(text);
-  container._text = text;
-  container._hitBox = hitBox;
-
-  canvas.tokens.addChild(container);
-  tokenObject[UI_KEY] = container;
-  return container;
-}
-
-function updateAtkUi(tokenObject) {
-  if (!tokenObject || tokenObject.destroyed) return;
-  const existing = tokenObject[UI_KEY];
-  const ui = (!existing || existing.destroyed) ? createAtkUi(tokenObject) : existing;
-  if (!ui) return;
-  const text = ui._text;
-  const hitBox = ui._hitBox;
-
-  const padX = 6;
-  const padY = 4;
-  const x = tokenObject.x - 10;
-  const y = tokenObject.y + tokenObject.h / 2;
-  const textY = 0;
-
-  ui.position.set(x, y);
-  text.position.set(0, textY);
-
-  const width = text.width + padX * 2;
-  const height = text.height + padY * 2;
-  hitBox.clear();
-  hitBox.beginFill(0x000000, 0.001);
-  hitBox.drawRoundedRect(-width, textY - (text.height / 2) - padY, width, height, 6);
-  hitBox.endFill();
-
-  ui.visible = tokenObject.visible;
-}
-
-function clearAllUi() {
-  for (const token of canvas.tokens.placeables) {
-    const ui = token[UI_KEY];
-    if (!ui) continue;
-    ui.parent?.removeChild(ui);
-    ui.destroy({ children: true });
-    delete token[UI_KEY];
-  }
-
-  // Cleanup safety for orphaned UI containers from earlier versions.
-  const toRemove = [];
-  for (const child of canvas.tokens.children ?? []) {
-    const marked = child?.[UI_MARKER_KEY] === true;
-    const legacyLikelyAtkUi = child?._text?.text === "ATK" && child?._hitBox instanceof PIXI.Graphics;
-    if (marked || legacyLikelyAtkUi) toRemove.push(child);
-  }
-  for (const ui of toRemove) {
-    ui.parent?.removeChild(ui);
-    ui.destroy({ children: true });
-  }
-}
-
-function refreshAll() {
-  for (const token of canvas.tokens.placeables) {
-    updateAtkUi(token);
-  }
-}
-
-if (!game[MODULE_KEY]) {
-  const hooks = {
-    canvasReady: Hooks.on("canvasReady", refreshAll),
-    refreshToken: Hooks.on("refreshToken", (token) => updateAtkUi(token))
-  };
-  game[MODULE_KEY] = {
-    ...hooks,
-    recentAttacks: new Map(),
-    recentTargets: new Map(),
-    autoApplyArmed: new Set()
-  };
-  refreshAll();
-  ui.notifications.info("ATK drag-to-target enabled (test). Drag ATK to another token and release.");
-} else {
-  const hooks = game[MODULE_KEY];
-  Hooks.off("canvasReady", hooks.canvasReady);
-  Hooks.off("refreshToken", hooks.refreshToken);
-  delete game[MODULE_KEY];
-  clearAllUi();
-  ui.notifications.info("ATK drag-to-target disabled.");
 }

@@ -1,38 +1,76 @@
-# Macro Index
+# Macros Repo
 
-This folder is organized for operational use now and future module packaging.
+This folder is structured as a standalone macros repository.
 
-## Combat
+## Layout
 
-- `macros/combat/attack-roll.js`
-  - Runs attack flow for currently selected token(s).
-  - Default: auto-roll first weapon attack.
-  - `Shift`: manual attack selection dialog.
-- `macros/combat/defence-roll.js`
-  - Runs defence flow for currently selected token(s).
-  - Default: auto-roll `defence`.
-  - `Shift`: manual skill selection dialog.
-- `macros/combat/spell-cast.js`
-  - Spell and magical action flow.
+- `macros/overlay/`
+  - User-facing macro entrypoints.
+  - `overlay-toggle.js`
+  - `spell-cast.js`
 
-## Overlay
+- `macros/src/actions/`
+  - Editable source of truth for actions library.
+  - `00-core.js`
+  - `10-attack-flow.js`
+  - `20-defence-flow.js`
+  - `30-api.js`
 
-- `macros/overlay/overlay-toggle.js`
-  - Toggles token overlays:
-  - right-side `W` and `STAG` controls
-  - top `RES` label
-  - staggered yellow status background
-  - left-side `ATK` / `DEF` actions using shared library
+- `macros/src/overlay/`
+  - Editable source of truth for overlay library.
+  - `00-header-and-combat.js`
+  - `10-layout-and-state.js`
+  - `20-controls.js`
+  - `30-status-and-api.js`
 
-## Shared Library
+- `macros/libs/`
+  - Generated monolithic libraries (compatibility macros for Foundry import).
+  - `tow-actions-lib-v1.js`
+  - `tow-overlay-lib-v1.js`
 
-- `macros/libs/tow-actions-lib-v1.js`
-  - Registers shared runtime API at `game.towActions`.
-  - Used by combat wrappers and overlay ATK/DEF controls.
-  - Expected macro name in Foundry: `tow-actions-lib-v1` (or fallback `tow-actions-lib`).
+- `macros/libs/actions-runtime/`
+  - Generated runtime-decoupled action macros.
+  - Part macros + loader macro register `game.towActions`.
 
-## Deprecated
+- `macros/libs/overlay-runtime/`
+  - Generated runtime-decoupled overlay macros.
+  - Part macros + loader macro register `game.towOverlay`.
 
-- `macros/deprecated/*`
-  - Archived legacy scripts kept for reference.
-  - Not part of current active flow.
+- `macros/tools/`
+  - Local build tooling.
+  - `build-actions-lib.sh`
+  - `build-actions-runtime-libs.mjs`
+  - `build-overlay-lib.sh`
+  - `build-overlay-runtime-libs.mjs`
+
+## Build
+
+- Rebuild actions artifacts:
+  - `bash macros/tools/build-actions-lib.sh`
+
+- Rebuild overlay artifacts:
+  - `bash macros/tools/build-overlay-lib.sh`
+
+## Runtime Macro Names
+
+- Actions monolith:
+  - `tow-actions-lib-v1`
+  - fallback: `tow-actions-lib`
+
+- Overlay monolith:
+  - `tow-overlay-lib-v1`
+  - fallback: `tow-overlay-lib`
+
+- Actions runtime-decoupled:
+  - `tow-actions-runtime-part-00-core-v1`
+  - `tow-actions-runtime-part-10-attack-flow-v1`
+  - `tow-actions-runtime-part-20-defence-flow-v1`
+  - `tow-actions-runtime-part-30-api-v1`
+  - `tow-actions-runtime-loader-v1`
+
+- Overlay runtime-decoupled:
+  - `tow-overlay-runtime-part-00-header-and-combat-v1`
+  - `tow-overlay-runtime-part-10-layout-and-state-v1`
+  - `tow-overlay-runtime-part-20-controls-v1`
+  - `tow-overlay-runtime-part-30-status-and-api-v1`
+  - `tow-overlay-runtime-loader-v1`
