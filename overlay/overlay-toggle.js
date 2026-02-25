@@ -13,18 +13,36 @@ const KEYS = {
   woundUI: "_towWoundControlUI",
   woundUiMarker: "_towOverlayWoundUiMarker",
   woundUiTokenId: "_towOverlayWoundUiTokenId",
+  nameLabel: "_towNameLabel",
+  nameLabelMarker: "_towOverlayNameLabelMarker",
+  nameLabelTokenId: "_towOverlayNameLabelTokenId",
   resilienceLabel: "_towResilienceLabel",
   defaultEffectsVisible: "_towDefaultEffectsVisible",
   statusPaletteLayer: "_towStatusPaletteLayer",
+  statusPaletteMarker: "_towOverlayStatusPaletteMarker",
+  statusPaletteTokenId: "_towOverlayStatusPaletteTokenId",
   statusPaletteMetrics: "_towStatusPaletteMetrics",
   deadVisualState: "_towDeadVisualState",
-  statusIconHandler: "_towStatusIconHandler"
+  statusIconHandler: "_towStatusIconHandler",
+  tokenInteractiveChildrenOriginal: "_towTokenInteractiveChildrenOriginal",
+  tokenHitAreaOriginal: "_towTokenHitAreaOriginal",
+  coreTooltipVisible: "_towCoreTooltipVisible",
+  coreTooltipRenderable: "_towCoreTooltipRenderable",
+  coreNameplateVisible: "_towCoreNameplateVisible",
+  coreNameplateRenderable: "_towCoreNameplateRenderable",
+  coreBorderVisible: "_towCoreBorderVisible",
+  coreBorderAlpha: "_towCoreBorderAlpha",
+  layoutBorder: "_towLayoutBorder",
+  layoutBounds: "_towLayoutBounds"
 };
 
 const STATUS_PALETTE_ICON_SIZE = 20;
 const STATUS_PALETTE_ICON_GAP = 2;
 const STATUS_PALETTE_ROWS = 2;
-const STATUS_PALETTE_TOKEN_PAD = 6;
+const TOKEN_CONTROL_PAD = 6;
+const NAME_TYPE_STACK_OVERLAP_PX = 13;
+const NAME_TYPE_TO_TOKEN_OFFSET_PX = 6;
+const STATUS_PALETTE_TOKEN_PAD = TOKEN_CONTROL_PAD;
 const STATUS_PALETTE_INACTIVE_TINT = 0x7A7A7A;
 const STATUS_PALETTE_ACTIVE_TINT = 0xFFFFFF;
 const STATUS_PALETTE_STAGGERED_RING = 0xFFD54A;
@@ -36,6 +54,10 @@ const STATUS_PALETTE_SPECIAL_BG_OUTLINE_WIDTH = 1;
 const STATUS_PALETTE_SPECIAL_BG_OUTLINE_ALPHA = 0.72;
 const STATUS_PALETTE_SPECIAL_BG_STAGGERED_ALPHA = 0.58;
 const STATUS_PALETTE_SPECIAL_BG_DEAD_ALPHA = 0.62;
+const LAYOUT_BORDER_COLOR = 0xE39A1A;
+const LAYOUT_BORDER_ALPHA = 1;
+const LAYOUT_BORDER_WIDTH = 2;
+const LAYOUT_BORDER_RADIUS = 6;
 const OVERLAY_FONT_SIZE = 22;
 const DRAG_START_THRESHOLD_PX = 8;
 const DRAG_LINE_OUTER_COLOR = 0x1A0909;
@@ -679,8 +701,7 @@ async function postFlowSeparatorCard(opposed, { sourceStatusHints = [], targetSt
 
   await ChatMessage.create({
     content,
-    speaker: { alias: "Combat Flow" },
-    rolls: []
+    speaker: { alias: "Combat Flow" }
   });
 }
 
@@ -688,6 +709,183 @@ function clearDisplayObject(displayObject) {
   if (!displayObject) return;
   displayObject.parent?.removeChild(displayObject);
   displayObject.destroy({ children: true });
+}
+
+function ensureTokenOverlayInteractivity(tokenObject) {
+  if (!tokenObject || tokenObject.destroyed) return;
+  if (typeof tokenObject[KEYS.tokenInteractiveChildrenOriginal] === "undefined") {
+    tokenObject[KEYS.tokenInteractiveChildrenOriginal] = tokenObject.interactiveChildren === true;
+  }
+  if (typeof tokenObject[KEYS.tokenHitAreaOriginal] === "undefined") {
+    tokenObject[KEYS.tokenHitAreaOriginal] = tokenObject.hitArea ?? null;
+  }
+  tokenObject.interactiveChildren = true;
+}
+
+function updateTokenOverlayHitArea(tokenObject) {
+  if (!tokenObject || tokenObject.destroyed) return;
+  const points = [
+    { x: 0, y: 0 },
+    { x: tokenObject.w, y: 0 },
+    { x: 0, y: tokenObject.h },
+    { x: tokenObject.w, y: tokenObject.h }
+  ];
+  const overlayChildren = [
+    tokenObject[KEYS.woundUI],
+    tokenObject[KEYS.nameLabel],
+    tokenObject[KEYS.resilienceLabel],
+    tokenObject[KEYS.statusPaletteLayer]
+  ].filter((child) => child && !child.destroyed);
+
+  for (const child of overlayChildren) {
+    const bounds = child.getBounds?.();
+    if (!bounds) continue;
+    const corners = [
+      { x: bounds.x, y: bounds.y },
+      { x: bounds.x + bounds.width, y: bounds.y },
+      { x: bounds.x, y: bounds.y + bounds.height },
+      { x: bounds.x + bounds.width, y: bounds.y + bounds.height }
+    ];
+    for (const corner of corners) {
+      const local = tokenObject.toLocal(corner);
+      points.push({ x: local.x, y: local.y });
+    }
+  }
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const p of points) {
+    minX = Math.min(minX, p.x);
+    minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x);
+    maxY = Math.max(maxY, p.y);
+  }
+  if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) return;
+  const pad = 3;
+  const hitBounds = {
+    x: minX - pad,
+    y: minY - pad,
+    width: Math.max(1, (maxX - minX) + (pad * 2)),
+    height: Math.max(1, (maxY - minY) + (pad * 2))
+  };
+  tokenObject.hitArea = new PIXI.Rectangle(
+    hitBounds.x,
+    hitBounds.y,
+    hitBounds.width,
+    hitBounds.height
+  );
+  tokenObject[KEYS.layoutBounds] = { ...hitBounds };
+  drawCustomLayoutBorder(tokenObject);
+}
+
+function restoreTokenOverlayInteractivity(tokenObject) {
+  if (!tokenObject || tokenObject.destroyed) return;
+  const prior = tokenObject[KEYS.tokenInteractiveChildrenOriginal];
+  if (typeof prior !== "boolean") return;
+  tokenObject.interactiveChildren = prior;
+  delete tokenObject[KEYS.tokenInteractiveChildrenOriginal];
+  if (KEYS.tokenHitAreaOriginal in tokenObject) {
+    tokenObject.hitArea = tokenObject[KEYS.tokenHitAreaOriginal];
+    delete tokenObject[KEYS.tokenHitAreaOriginal];
+  }
+}
+
+function ensureCustomLayoutBorder(tokenObject) {
+  if (!tokenObject || tokenObject.destroyed) return null;
+  let border = tokenObject[KEYS.layoutBorder];
+  if (!border || border.destroyed || border.parent !== tokenObject) {
+    if (border && !border.destroyed) clearDisplayObject(border);
+    border = new PIXI.Graphics();
+    border.eventMode = "none";
+    tokenObject.addChild(border);
+    tokenObject[KEYS.layoutBorder] = border;
+  }
+  return border;
+}
+
+function drawCustomLayoutBorder(tokenObject) {
+  if (!tokenObject || tokenObject.destroyed) return;
+  const border = ensureCustomLayoutBorder(tokenObject);
+  if (!border) return;
+  const bounds = tokenObject[KEYS.layoutBounds];
+  border.clear();
+  if (!bounds) return;
+  border.lineStyle({
+    width: LAYOUT_BORDER_WIDTH,
+    color: LAYOUT_BORDER_COLOR,
+    alpha: LAYOUT_BORDER_ALPHA,
+    alignment: 0.5,
+    cap: "round",
+    join: "round"
+  });
+  border.drawRoundedRect(
+    bounds.x,
+    bounds.y,
+    bounds.width,
+    bounds.height,
+    LAYOUT_BORDER_RADIUS
+  );
+}
+
+function updateCustomLayoutBorderVisibility(tokenObject, { hovered = null, controlled = null } = {}) {
+  if (!tokenObject || tokenObject.destroyed) return;
+  const border = ensureCustomLayoutBorder(tokenObject);
+  if (!border) return;
+  const isHovered = (typeof hovered === "boolean")
+    ? hovered
+    : (tokenObject.hover === true || tokenObject._hover === true);
+  const isControlled = (typeof controlled === "boolean")
+    ? controlled
+    : (tokenObject.controlled === true || tokenObject._controlled === true);
+  border.visible = tokenObject.visible && (isHovered || isControlled);
+}
+
+function clearCustomLayoutBorder(tokenObject) {
+  const border = tokenObject?.[KEYS.layoutBorder];
+  if (border) clearDisplayObject(border);
+  delete tokenObject?.[KEYS.layoutBorder];
+  delete tokenObject?.[KEYS.layoutBounds];
+}
+
+async function bringTokenToFront(tokenObject) {
+  if (!tokenObject || tokenObject.destroyed) return;
+  const tokenDocument = tokenObject.document ?? null;
+  if (tokenDocument?.isOwner && typeof tokenDocument.update === "function") {
+    const sorts = (canvas?.tokens?.placeables ?? [])
+      .map((token) => Number(token?.document?.sort ?? NaN))
+      .filter((value) => Number.isFinite(value));
+    const highestSort = sorts.length ? Math.max(...sorts) : Number(tokenDocument.sort ?? 0);
+    const currentSort = Number(tokenDocument.sort ?? 0);
+    if (Number.isFinite(highestSort) && currentSort <= highestSort) {
+      if (currentSort < highestSort) {
+        await tokenDocument.update({ sort: highestSort + 1 });
+      }
+      return;
+    }
+  }
+
+  const layer = tokenObject.layer ?? canvas?.tokens;
+
+  if (typeof layer?.bringToFront === "function") {
+    layer.bringToFront(tokenObject);
+    return;
+  }
+
+  if (typeof tokenObject.bringToFront === "function") {
+    tokenObject.bringToFront();
+    return;
+  }
+
+  const parent = tokenObject.parent;
+  if (!parent || typeof parent.setChildIndex !== "function" || !Array.isArray(parent.children)) return;
+  const topIndex = Math.max(0, parent.children.length - 1);
+  const currentIndex = typeof parent.getChildIndex === "function"
+    ? parent.getChildIndex(tokenObject)
+    : -1;
+  if (currentIndex === topIndex) return;
+  parent.setChildIndex(tokenObject, topIndex);
 }
 
 function getDeadFilterTargets(tokenObject) {
@@ -867,6 +1065,9 @@ async function syncWoundsFromDeadState(actor) {
   }
 
   if (!wasDead) return;
+  // If dead was removed after a wound decrement, preserve current wound count.
+  // Only run the legacy "clear all wounds" behavior when still at full cap.
+  if (getActorWoundItemCount(actor) < cap) return;
   await runActorOpLock(actor, "dead-wound-sync", async () => {
     const maxPasses = Math.max(1, getActorWoundItemCount(actor) + 2);
     for (let i = 0; i < maxPasses; i++) {
@@ -900,6 +1101,16 @@ function queueWoundSyncFromDeadState(actor) {
   state.deadToWoundSyncTimers.set(actorKey, timer);
 }
 
+function primeDeadPresence(actor) {
+  if (!actor) return;
+  const state = game[MODULE_KEY];
+  if (!state) return;
+  if (!state.deadPresenceByActor) state.deadPresenceByActor = new Map();
+  const actorKey = actor.uuid ?? actor.id;
+  if (!actorKey || state.deadPresenceByActor.has(actorKey)) return;
+  state.deadPresenceByActor.set(actorKey, !!actor.hasCondition?.("dead"));
+}
+
 function getResilienceValue(tokenDocument) {
   return tokenDocument?.actor?.system?.resilience?.value ?? null;
 }
@@ -925,8 +1136,8 @@ async function removeWound(actor) {
 
   await runActorOpLock(actor, "remove-wound", async () => {
     const wounds = (actor.items?.contents ?? []).filter((item) => item.type === WOUND_ITEM_TYPE);
+    const isMinion = actor.type === "npc" && actor.system?.type === "minion";
     if (!wounds.length) {
-      const isMinion = actor.type === "npc" && actor.system?.type === "minion";
       if (isMinion && actor.hasCondition?.("dead")) {
         await actor.removeCondition("dead");
       }
@@ -937,6 +1148,12 @@ async function removeWound(actor) {
     if (!toDelete?.id) return;
     if (!actor.items.get(toDelete.id)) return;
     await actor.deleteEmbeddedDocuments("Item", [toDelete.id]);
+
+    // Minions can stay flagged dead after last wound is removed; clear dead immediately.
+    if (isMinion && actor.hasCondition?.("dead")) {
+      const remaining = getActorWoundItemCount(actor);
+      if (remaining <= 0) await actor.removeCondition("dead");
+    }
   });
 }
 
@@ -961,6 +1178,26 @@ function getResilienceStyle() {
   style.dropShadow = false;
   style.align = "center";
   return style;
+}
+
+function getNameStyle() {
+  const style = getControlStyle();
+  style.align = "center";
+  return style;
+}
+
+function getNameTypeStyle() {
+  const style = getControlStyle();
+  style.align = "center";
+  return style;
+}
+
+function getActorTypeLabel(actor) {
+  const systemType = String(actor?.system?.type ?? "").trim();
+  if (systemType) return systemType;
+  const actorType = String(actor?.type ?? "").trim();
+  if (actorType) return actorType;
+  return "actor";
 }
 
 function drawHitBoxRect(graphics, x, y, width, height) {
@@ -1135,7 +1372,7 @@ function createWoundControlUI(tokenObject) {
   container._attackText = attackText;
   container._defenceText = defenceText;
 
-  canvas.tokens.addChild(container);
+  tokenObject.addChild(container);
   tokenObject[KEYS.woundUI] = container;
   return container;
 }
@@ -1167,6 +1404,7 @@ function updateWoundControlUI(tokenObject) {
   const staleUi = !!existingUi && (
     existingUi.destroyed ||
     existingUi.parent == null ||
+    existingUi.parent !== tokenObject ||
     hasBrokenTextStyle ||
     existingUi._attackHitBox?.destroyed ||
     existingUi._defenceHitBox?.destroyed ||
@@ -1199,8 +1437,8 @@ function updateWoundControlUI(tokenObject) {
     return updateWoundControlUI(tokenObject);
   }
 
-  const padX = 5;
-  const padY = 3;
+  const padX = 3;
+  const padY = 2;
   const rowGap = Math.max(18, countText.height + 4);
   const centerY = 0;
   const rightBottomY = centerY + (rowGap / 2);
@@ -1215,10 +1453,10 @@ function updateWoundControlUI(tokenObject) {
     countText.height + (padY * 2)
   );
 
-  ui.position.set(tokenObject.x + tokenObject.w + 6, tokenObject.y + (tokenObject.h / 2));
+  ui.position.set(tokenObject.w + TOKEN_CONTROL_PAD, tokenObject.h / 2);
   countText.position.set(0, rightBottomY);
 
-  const leftX = -(tokenObject.w + 10);
+  const leftX = -(tokenObject.w + (TOKEN_CONTROL_PAD * 2));
   attackText.position.set(leftX, leftTopY);
   defenceText.position.set(leftX, leftBottomY);
 
@@ -1261,6 +1499,68 @@ function clearAllWoundControls() {
   for (const ui of orphaned) clearDisplayObject(ui);
 }
 
+function updateNameLabel(tokenObject) {
+  if (!tokenObject || tokenObject.destroyed) return;
+
+  const tokenName = tokenObject.document?.name ?? tokenObject.name ?? "";
+  const actor = tokenObject.document?.actor ?? null;
+  const typeLabel = getActorTypeLabel(actor).toLowerCase();
+  if (!tokenName) {
+    const labelContainer = tokenObject[KEYS.nameLabel];
+    if (!labelContainer) return;
+    labelContainer.parent?.removeChild(labelContainer);
+    labelContainer.destroy({ children: true });
+    delete tokenObject[KEYS.nameLabel];
+    return;
+  }
+
+  let labelContainer = tokenObject[KEYS.nameLabel];
+  if (!labelContainer || labelContainer.destroyed || labelContainer.parent !== tokenObject || !labelContainer._nameText || !labelContainer._typeText) {
+    if (labelContainer && !labelContainer.destroyed) {
+      labelContainer.parent?.removeChild(labelContainer);
+      labelContainer.destroy({ children: true });
+    }
+
+    labelContainer = new PIXI.Container();
+    labelContainer.eventMode = "none";
+
+    const nameText = new PreciseTextClass("", getNameStyle());
+    nameText.anchor.set(0.5, 1);
+    nameText.eventMode = "none";
+
+    const typeText = new PreciseTextClass("", getNameTypeStyle());
+    typeText.anchor.set(0.5, 1);
+    typeText.eventMode = "none";
+
+    labelContainer.addChild(nameText);
+    labelContainer.addChild(typeText);
+    labelContainer._nameText = nameText;
+    labelContainer._typeText = typeText;
+    labelContainer[KEYS.nameLabelMarker] = true;
+    labelContainer[KEYS.nameLabelTokenId] = tokenObject.id;
+
+    tokenObject.addChild(labelContainer);
+    tokenObject[KEYS.nameLabel] = labelContainer;
+  }
+
+  const nameText = labelContainer._nameText;
+  const typeText = labelContainer._typeText;
+  nameText.text = tokenName;
+  typeText.text = `<${typeLabel}>`;
+  const tokenEdgePad = TOKEN_CONTROL_PAD;
+  const lineGap = 0;
+  const typeBounds = typeText.getLocalBounds();
+  const typeBottom = typeBounds.y + typeBounds.height;
+  const typeTop = typeBounds.y;
+  typeText.position.set(0, -(tokenEdgePad + typeBottom) + NAME_TYPE_TO_TOKEN_OFFSET_PX);
+
+  const nameBounds = nameText.getLocalBounds();
+  const nameBottom = nameBounds.y + nameBounds.height;
+  nameText.position.set(0, (typeText.y + typeTop) + NAME_TYPE_STACK_OVERLAP_PX - lineGap - nameBottom);
+  labelContainer.position.set(tokenObject.w / 2, 0);
+  labelContainer.visible = tokenObject.visible;
+}
+
 function updateResilienceLabel(tokenObject) {
   if (!tokenObject || tokenObject.destroyed) return;
 
@@ -1268,13 +1568,24 @@ function updateResilienceLabel(tokenObject) {
   if (resilience === null || resilience === undefined) {
     const label = tokenObject[KEYS.resilienceLabel];
     if (!label) return;
-    tokenObject.removeChild(label);
+    label.parent?.removeChild(label);
     label.destroy();
     delete tokenObject[KEYS.resilienceLabel];
     return;
   }
 
   let label = tokenObject[KEYS.resilienceLabel];
+  const staleLabel = !!label && (
+    label.destroyed ||
+    label.parent == null ||
+    label.parent !== tokenObject
+  );
+  if (staleLabel) {
+    clearDisplayObject(label);
+    delete tokenObject[KEYS.resilienceLabel];
+    label = null;
+  }
+
   if (!label) {
     label = new PreciseTextClass("", getResilienceStyle());
     label.anchor.set(0, 0.5);
@@ -1285,7 +1596,7 @@ function updateResilienceLabel(tokenObject) {
   label.text = `RES ${resilience}`;
   const rowGap = Math.max(18, label.height + 4);
   const rightTopY = (tokenObject.h / 2) - (rowGap / 2);
-  label.position.set(tokenObject.w + 6, rightTopY);
+  label.position.set(tokenObject.w + TOKEN_CONTROL_PAD, rightTopY);
   label.visible = tokenObject.visible;
 }
 
@@ -1293,10 +1604,26 @@ function clearAllResilienceLabels() {
   forEachSceneToken((token) => {
     const label = token[KEYS.resilienceLabel];
     if (!label) return;
-    token.removeChild(label);
+    label.parent?.removeChild(label);
     label.destroy();
     delete token[KEYS.resilienceLabel];
   });
+}
+
+function clearAllNameLabels() {
+  forEachSceneToken((token) => {
+    const labelContainer = token[KEYS.nameLabel];
+    if (!labelContainer) return;
+    labelContainer.parent?.removeChild(labelContainer);
+    labelContainer.destroy({ children: true });
+    delete token[KEYS.nameLabel];
+  });
+
+  const orphaned = [];
+  for (const child of canvas.tokens.children ?? []) {
+    if (child?.[KEYS.nameLabelMarker] === true) orphaned.push(child);
+  }
+  for (const labelContainer of orphaned) clearDisplayObject(labelContainer);
 }
 
 function getIconSrc(displayObject) {
@@ -1447,6 +1774,78 @@ function restoreDefaultStatusPanel(tokenObject) {
   delete tokenObject[KEYS.defaultEffectsVisible];
 }
 
+function hideCoreTokenHoverVisuals(tokenObject) {
+  if (!tokenObject || tokenObject.destroyed) return;
+  const tooltip = tokenObject?.tooltip ?? null;
+  if (tooltip) {
+    if (typeof tokenObject[KEYS.coreTooltipVisible] === "undefined") {
+      tokenObject[KEYS.coreTooltipVisible] = tooltip.visible !== false;
+    }
+    if (typeof tokenObject[KEYS.coreTooltipRenderable] === "undefined") {
+      tokenObject[KEYS.coreTooltipRenderable] = tooltip.renderable !== false;
+    }
+    tooltip.visible = false;
+    tooltip.renderable = false;
+  }
+
+  const nameplate = tokenObject?.nameplate ?? null;
+  if (nameplate) {
+    if (typeof tokenObject[KEYS.coreNameplateVisible] === "undefined") {
+      tokenObject[KEYS.coreNameplateVisible] = nameplate.visible !== false;
+    }
+    if (typeof tokenObject[KEYS.coreNameplateRenderable] === "undefined") {
+      tokenObject[KEYS.coreNameplateRenderable] = nameplate.renderable !== false;
+    }
+    nameplate.visible = false;
+    nameplate.renderable = false;
+  }
+
+  const border = tokenObject.border ?? null;
+  if (border) {
+    if (typeof tokenObject[KEYS.coreBorderVisible] === "undefined") {
+      tokenObject[KEYS.coreBorderVisible] = border.visible !== false;
+    }
+    if (typeof tokenObject[KEYS.coreBorderAlpha] === "undefined") {
+      tokenObject[KEYS.coreBorderAlpha] = Number(border.alpha ?? 1);
+    }
+    border.visible = false;
+    if ("alpha" in border) border.alpha = 0;
+  }
+}
+
+function restoreCoreTokenHoverVisuals(tokenObject) {
+  if (!tokenObject || tokenObject.destroyed) return;
+  const tooltip = tokenObject?.tooltip ?? null;
+  if (tooltip && typeof tokenObject[KEYS.coreTooltipVisible] === "boolean") {
+    tooltip.visible = tokenObject[KEYS.coreTooltipVisible];
+  }
+  if (tooltip && typeof tokenObject[KEYS.coreTooltipRenderable] === "boolean") {
+    tooltip.renderable = tokenObject[KEYS.coreTooltipRenderable];
+  }
+  delete tokenObject[KEYS.coreTooltipVisible];
+  delete tokenObject[KEYS.coreTooltipRenderable];
+
+  const nameplate = tokenObject?.nameplate ?? null;
+  if (nameplate && typeof tokenObject[KEYS.coreNameplateVisible] === "boolean") {
+    nameplate.visible = tokenObject[KEYS.coreNameplateVisible];
+  }
+  if (nameplate && typeof tokenObject[KEYS.coreNameplateRenderable] === "boolean") {
+    nameplate.renderable = tokenObject[KEYS.coreNameplateRenderable];
+  }
+  delete tokenObject[KEYS.coreNameplateVisible];
+  delete tokenObject[KEYS.coreNameplateRenderable];
+
+  const border = tokenObject.border ?? null;
+  if (border && typeof tokenObject[KEYS.coreBorderVisible] === "boolean") {
+    border.visible = tokenObject[KEYS.coreBorderVisible];
+  }
+  if (border && typeof tokenObject[KEYS.coreBorderAlpha] === "number" && "alpha" in border) {
+    border.alpha = tokenObject[KEYS.coreBorderAlpha];
+  }
+  delete tokenObject[KEYS.coreBorderVisible];
+  delete tokenObject[KEYS.coreBorderAlpha];
+}
+
 async function toggleConditionFromPalette(actor, conditionId) {
   if (!actor || !conditionId) return;
   if (!canEditActor(actor)) {
@@ -1581,6 +1980,7 @@ function setupStatusPalette(tokenObject) {
   let layer = tokenObject[KEYS.statusPaletteLayer];
   const shouldRebuild = !layer
     || layer.destroyed
+    || layer.parent !== tokenObject
     || (layer.children?.length ?? 0) !== expectedCount
     || tokenObject[KEYS.statusPaletteMetrics]?.iconSize !== iconSize;
 
@@ -1590,7 +1990,9 @@ function setupStatusPalette(tokenObject) {
     layer.eventMode = "static";
     layer.interactive = true;
     layer.interactiveChildren = true;
-    canvas.tokens.addChild(layer);
+    layer[KEYS.statusPaletteMarker] = true;
+    layer[KEYS.statusPaletteTokenId] = tokenObject.id;
+    tokenObject.addChild(layer);
     tokenObject[KEYS.statusPaletteLayer] = layer;
 
     const columns = Math.max(1, Math.ceil(expectedCount / STATUS_PALETTE_ROWS));
@@ -1630,8 +2032,8 @@ function setupStatusPalette(tokenObject) {
   const totalRows = Math.ceil(expectedCount / columns);
   const totalWidth = (columns * iconSize) + ((columns - 1) * STATUS_PALETTE_ICON_GAP);
   const totalHeight = (totalRows * iconSize) + ((totalRows - 1) * STATUS_PALETTE_ICON_GAP);
-  const posX = tokenObject.x + Math.round((tokenObject.w - totalWidth) / 2);
-  const posY = tokenObject.y + Math.round(tokenObject.h + STATUS_PALETTE_TOKEN_PAD);
+  const posX = Math.round((tokenObject.w - totalWidth) / 2);
+  const posY = Math.round(tokenObject.h + STATUS_PALETTE_TOKEN_PAD);
   layer.position.set(posX, posY);
   layer.visible = tokenObject.visible;
   const activeStatuses = getActorStatusSet(actor);
@@ -1647,19 +2049,35 @@ function clearAllStatusOverlays() {
     for (const sprite of token.effects?.children ?? []) clearStatusIconHandler(sprite);
     clearStatusPalette(token);
     restoreDefaultStatusPanel(token);
+    restoreCoreTokenHoverVisuals(token);
     clearDeadVisual(token);
+    restoreTokenOverlayInteractivity(token);
+    clearCustomLayoutBorder(token);
   });
+
+  const orphaned = [];
+  for (const child of canvas.tokens.children ?? []) {
+    if (child?.[KEYS.statusPaletteMarker] === true) orphaned.push(child);
+  }
+  for (const layer of orphaned) clearDisplayObject(layer);
 }
 
 function refreshTokenOverlay(tokenObject) {
+  primeDeadPresence(getActorFromToken(tokenObject));
+  ensureTokenOverlayInteractivity(tokenObject);
   hideDefaultStatusPanel(tokenObject);
+  hideCoreTokenHoverVisuals(tokenObject);
   setupStatusPalette(tokenObject);
   updateWoundControlUI(tokenObject);
+  updateNameLabel(tokenObject);
   updateResilienceLabel(tokenObject);
+  updateTokenOverlayHitArea(tokenObject);
+  updateCustomLayoutBorderVisibility(tokenObject);
   ensureDeadVisual(tokenObject);
 }
 
 function refreshActorOverlays(actor) {
+  primeDeadPresence(actor);
   queueWoundSyncFromDeadState(actor);
   for (const tokenObject of getActorTokenObjects(actor)) {
     refreshTokenOverlay(tokenObject);
@@ -1696,6 +2114,15 @@ function registerHooks() {
   return {
     canvasReady: Hooks.on("canvasReady", refreshAllOverlays),
     refreshToken: Hooks.on("refreshToken", (token) => refreshTokenOverlay(token)),
+    hoverToken: Hooks.on("hoverToken", (token, hovered) => {
+      hideCoreTokenHoverVisuals(token);
+      updateCustomLayoutBorderVisibility(token, { hovered });
+    }),
+    controlToken: Hooks.on("controlToken", (token, controlled) => {
+      if (controlled) void bringTokenToFront(token);
+      hideCoreTokenHoverVisuals(token);
+      updateCustomLayoutBorderVisibility(token, { controlled });
+    }),
     createItem: Hooks.on("createItem", (item) => {
       if (item.type !== WOUND_ITEM_TYPE) return;
       refreshActorOverlays(item.parent);
@@ -1723,6 +2150,8 @@ function registerHooks() {
 function unregisterHooks(hookIds) {
   Hooks.off("canvasReady", hookIds.canvasReady);
   Hooks.off("refreshToken", hookIds.refreshToken);
+  Hooks.off("hoverToken", hookIds.hoverToken);
+  Hooks.off("controlToken", hookIds.controlToken);
   Hooks.off("createItem", hookIds.createItem);
   Hooks.off("updateItem", hookIds.updateItem);
   Hooks.off("deleteItem", hookIds.deleteItem);
@@ -1772,6 +2201,7 @@ if (!game[MODULE_KEY]) {
   delete game[MODULE_KEY];
 
   clearAllWoundControls();
+  clearAllNameLabels();
   clearAllResilienceLabels();
   clearAllStatusOverlays();
   ui.notifications.info("Overlay disabled.");
