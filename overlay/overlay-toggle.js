@@ -93,10 +93,19 @@ const STATUS_TOOLTIP_BG_COLOR = 0x0F0C09;
 const STATUS_TOOLTIP_BG_ALPHA = 0.94;
 const STATUS_TOOLTIP_BORDER_COLOR = 0xC18B2C;
 const STATUS_TOOLTIP_BORDER_ALPHA = 0.9;
+const STATUS_TOOLTIP_DOM_CLASS = "tow-overlay-status-tooltip";
 const OVERLAY_TEXT_RESOLUTION_MIN = 3;
 const OVERLAY_TEXT_RESOLUTION_MAX = 8;
+const OVERLAY_CONTROL_ICON_TINT = 0xFFF4D8;
+const OVERLAY_CONTROL_ICON_OUTLINE_COLOR = 0x2A2620;
+const OVERLAY_CONTROL_ICON_OUTLINE_THICKNESS = 1.4;
+const OVERLAY_CONTROL_ICON_OUTLINE_ALPHA = 0.58;
 
 const WOUND_ITEM_TYPE = "wound";
+const ICON_SRC_ATK = "icons/svg/sword.svg";
+const ICON_SRC_DEF = "icons/svg/shield.svg";
+const ICON_SRC_WOUND = "icons/svg/blood.svg";
+const ICON_SRC_RES = "icons/svg/statue.svg";
 
 function canEditActor(actor) {
   return actor?.isOwner === true;
@@ -1217,6 +1226,67 @@ function getNameTypeStyle() {
   return style;
 }
 
+function getIconStyle() {
+  const style = getControlStyle();
+  style.fontSize = OVERLAY_FONT_SIZE;
+  style.align = "center";
+  return style;
+}
+
+function getIconValueStyle() {
+  const style = getControlStyle();
+  style.fontWeight = "700";
+  return style;
+}
+
+function createOverlayIconSprite(src, size = OVERLAY_FONT_SIZE + 2) {
+  const OutlineFilterClass = PIXI?.filters?.OutlineFilter ?? PIXI?.OutlineFilter;
+  if (typeof OutlineFilterClass === "function") {
+    const sprite = PIXI.Sprite.from(src);
+    sprite.width = size;
+    sprite.height = size;
+    sprite.tint = OVERLAY_CONTROL_ICON_TINT;
+    sprite.alpha = 0.98;
+    const outline = new OutlineFilterClass(
+      OVERLAY_CONTROL_ICON_OUTLINE_THICKNESS,
+      OVERLAY_CONTROL_ICON_OUTLINE_COLOR,
+      1
+    );
+    if ("alpha" in outline) outline.alpha = OVERLAY_CONTROL_ICON_OUTLINE_ALPHA;
+    sprite.filters = [outline];
+    sprite.eventMode = "none";
+    return sprite;
+  }
+
+  // Runtime-safe fallback when OutlineFilter is unavailable: fake stroke with offset clones.
+  const container = new PIXI.Container();
+  container.eventMode = "none";
+  const offsets = [
+    [-1, -1], [0, -1], [1, -1],
+    [-1, 0],            [1, 0],
+    [-1, 1],  [0, 1],  [1, 1]
+  ];
+  for (const [dx, dy] of offsets) {
+    const strokeSprite = PIXI.Sprite.from(src);
+    strokeSprite.width = size;
+    strokeSprite.height = size;
+    strokeSprite.tint = OVERLAY_CONTROL_ICON_OUTLINE_COLOR;
+    strokeSprite.alpha = OVERLAY_CONTROL_ICON_OUTLINE_ALPHA;
+    strokeSprite.position.set(dx, dy);
+    strokeSprite.eventMode = "none";
+    container.addChild(strokeSprite);
+  }
+
+  const sprite = PIXI.Sprite.from(src);
+  sprite.width = size;
+  sprite.height = size;
+  sprite.tint = OVERLAY_CONTROL_ICON_TINT;
+  sprite.alpha = 0.98;
+  sprite.eventMode = "none";
+  container.addChild(sprite);
+  return container;
+}
+
 function getActorTypeLabel(actor) {
   const systemType = String(actor?.system?.type ?? "").trim();
   if (systemType) return systemType;
@@ -1262,10 +1332,11 @@ function createWoundControlUI(tokenObject) {
   container[KEYS.woundUiMarker] = true;
   container[KEYS.woundUiTokenId] = tokenObject.id;
 
-  const countText = new PreciseTextClass("", getControlStyle());
+  const countText = new PreciseTextClass("", getIconValueStyle());
   tuneOverlayText(countText);
   countText.anchor.set(0, 0.5);
   countText.eventMode = "none";
+  const countIcon = createOverlayIconSprite(ICON_SRC_WOUND, OVERLAY_FONT_SIZE + 1);
 
   const countHitBox = new PIXI.Graphics();
   countHitBox.eventMode = "static";
@@ -1273,15 +1344,9 @@ function createWoundControlUI(tokenObject) {
   countHitBox.buttonMode = true;
   countHitBox.cursor = "pointer";
 
-  const attackText = new PreciseTextClass("ATK", getControlStyle());
-  tuneOverlayText(attackText);
-  attackText.anchor.set(1, 0.5);
-  attackText.eventMode = "none";
+  const attackIcon = createOverlayIconSprite(ICON_SRC_ATK, OVERLAY_FONT_SIZE + 2);
 
-  const defenceText = new PreciseTextClass("DEF", getControlStyle());
-  tuneOverlayText(defenceText);
-  defenceText.anchor.set(1, 0.5);
-  defenceText.eventMode = "none";
+  const defenceIcon = createOverlayIconSprite(ICON_SRC_DEF, OVERLAY_FONT_SIZE + 2);
 
   const attackHitBox = new PIXI.Graphics();
   attackHitBox.eventMode = "static";
@@ -1314,11 +1379,11 @@ function createWoundControlUI(tokenObject) {
   countHitBox.on("contextmenu", preventPointerDefault);
   countHitBox.on("pointerover", (event) => {
     const point = getScreenPoint(event) ?? getWorldPoint(event);
-    showOverlayTooltip("Wounds (W)", "Left-click adds 1 wound. Right-click removes 1 wound.", point);
+    showOverlayTooltip("Wounds", "Left-click adds 1 wound. Right-click removes 1 wound.", point);
   });
   countHitBox.on("pointermove", (event) => {
     const point = getScreenPoint(event) ?? getWorldPoint(event);
-    showOverlayTooltip("Wounds (W)", "Left-click adds 1 wound. Right-click removes 1 wound.", point);
+    showOverlayTooltip("Wounds", "Left-click adds 1 wound. Right-click removes 1 wound.", point);
   });
   countHitBox.on("pointerout", hideStatusTooltip);
 
@@ -1403,11 +1468,11 @@ function createWoundControlUI(tokenObject) {
   attackHitBox.on("contextmenu", preventPointerDefault);
   attackHitBox.on("pointerover", (event) => {
     const point = getScreenPoint(event) ?? getWorldPoint(event);
-    showOverlayTooltip("ATK", "Attack roll. Left-click attacks. Drag to a target for quick targeting. Hold Shift for manual mode.", point);
+    showOverlayTooltip("Attack", "Attack roll. Left-click attacks. Drag to a target for quick targeting. Hold Shift for manual mode.", point);
   });
   attackHitBox.on("pointermove", (event) => {
     const point = getScreenPoint(event) ?? getWorldPoint(event);
-    showOverlayTooltip("ATK", "Attack roll. Left-click attacks. Drag to a target for quick targeting. Hold Shift for manual mode.", point);
+    showOverlayTooltip("Attack", "Attack roll. Left-click attacks. Drag to a target for quick targeting. Hold Shift for manual mode.", point);
   });
   attackHitBox.on("pointerout", hideStatusTooltip);
 
@@ -1422,27 +1487,29 @@ function createWoundControlUI(tokenObject) {
   defenceHitBox.on("contextmenu", preventPointerDefault);
   defenceHitBox.on("pointerover", (event) => {
     const point = getScreenPoint(event) ?? getWorldPoint(event);
-    showOverlayTooltip("DEF", "Defence roll. Left-click defends. Hold Shift for manual mode.", point);
+    showOverlayTooltip("Defence", "Defence roll. Left-click defends. Hold Shift for manual mode.", point);
   });
   defenceHitBox.on("pointermove", (event) => {
     const point = getScreenPoint(event) ?? getWorldPoint(event);
-    showOverlayTooltip("DEF", "Defence roll. Left-click defends. Hold Shift for manual mode.", point);
+    showOverlayTooltip("Defence", "Defence roll. Left-click defends. Hold Shift for manual mode.", point);
   });
   defenceHitBox.on("pointerout", hideStatusTooltip);
 
   container.addChild(countHitBox);
+  container.addChild(countIcon);
   container.addChild(countText);
   container.addChild(attackHitBox);
   container.addChild(defenceHitBox);
-  container.addChild(attackText);
-  container.addChild(defenceText);
+  container.addChild(attackIcon);
+  container.addChild(defenceIcon);
 
   container._countText = countText;
+  container._countIcon = countIcon;
   container._countHitBox = countHitBox;
   container._attackHitBox = attackHitBox;
   container._defenceHitBox = defenceHitBox;
-  container._attackText = attackText;
-  container._defenceText = defenceText;
+  container._attackIcon = attackIcon;
+  container._defenceIcon = defenceIcon;
 
   tokenObject.addChild(container);
   tokenObject[KEYS.woundUI] = container;
@@ -1464,14 +1531,14 @@ function updateWoundControlUI(tokenObject) {
   const existingUi = tokenObject[KEYS.woundUI];
   const hasBrokenTextStyle = !!existingUi && (
     !existingUi._countText ||
-    !existingUi._attackText ||
-    !existingUi._defenceText ||
+    !existingUi._countIcon ||
+    !existingUi._attackIcon ||
+    !existingUi._defenceIcon ||
     existingUi._countText.destroyed ||
-    existingUi._attackText.destroyed ||
-    existingUi._defenceText.destroyed ||
-    !existingUi._countText.style ||
-    !existingUi._attackText.style ||
-    !existingUi._defenceText.style
+    existingUi._countIcon.destroyed ||
+    existingUi._attackIcon.destroyed ||
+    existingUi._defenceIcon.destroyed ||
+    !existingUi._countText.style
   );
   const staleUi = !!existingUi && (
     existingUi.destroyed ||
@@ -1493,19 +1560,16 @@ function updateWoundControlUI(tokenObject) {
   const actor = getActorFromToken(tokenObject);
 
   const countText = ui._countText;
+  const countIcon = ui._countIcon;
   const countHitBox = ui._countHitBox;
   const attackHitBox = ui._attackHitBox;
   const defenceHitBox = ui._defenceHitBox;
-  const attackText = ui._attackText;
-  const defenceText = ui._defenceText;
+  const attackIcon = ui._attackIcon;
+  const defenceIcon = ui._defenceIcon;
   tuneOverlayText(countText);
-  tuneOverlayText(attackText);
-  tuneOverlayText(defenceText);
 
   try {
-    countText.text = `W: ${count}`;
-    attackText.text = "ATK";
-    defenceText.text = "DEF";
+    countText.text = `${count}`;
   } catch (_error) {
     clearDisplayObject(ui);
     delete tokenObject[KEYS.woundUI];
@@ -1520,40 +1584,51 @@ function updateWoundControlUI(tokenObject) {
   const leftTopY = -(rowGap / 2);
   const leftBottomY = leftTopY + rowGap;
 
+  const countGap = 4;
+  countIcon.position.set(0, Math.round(rightBottomY - (countIcon.height / 2)));
+  countText.position.set(Math.round(countIcon.width + countGap), Math.round(rightBottomY));
+  const countBlockWidth = countIcon.width + countGap + countText.width;
+  const countBlockHeight = Math.max(countIcon.height, countText.height);
   drawHitBoxRect(
     countHitBox,
     -padX,
-    rightBottomY - (countText.height / 2) - padY,
-    countText.width + (padX * 2),
-    countText.height + (padY * 2)
+    rightBottomY - (countBlockHeight / 2) - padY,
+    countBlockWidth + (padX * 2),
+    countBlockHeight + (padY * 2)
   );
 
   ui.position.set(Math.round(tokenObject.w + TOKEN_CONTROL_PAD), Math.round(tokenObject.h / 2));
-  countText.position.set(0, Math.round(rightBottomY));
 
   const leftX = -(tokenObject.w + (TOKEN_CONTROL_PAD * 2));
-  attackText.position.set(Math.round(leftX), Math.round(leftTopY));
-  defenceText.position.set(Math.round(leftX), Math.round(leftBottomY));
+  attackIcon.position.set(
+    Math.round(leftX - attackIcon.width),
+    Math.round(leftTopY - (attackIcon.height / 2))
+  );
+  defenceIcon.position.set(
+    Math.round(leftX - defenceIcon.width),
+    Math.round(leftBottomY - (defenceIcon.height / 2))
+  );
 
   drawHitBoxRect(
     attackHitBox,
-    leftX - attackText.width - padX,
-    leftTopY - (attackText.height / 2) - padY,
-    attackText.width + (padX * 2),
-    attackText.height + (padY * 2)
+    attackIcon.x - padX,
+    attackIcon.y - padY,
+    attackIcon.width + (padX * 2),
+    attackIcon.height + (padY * 2)
   );
   drawHitBoxRect(
     defenceHitBox,
-    leftX - defenceText.width - padX,
-    leftBottomY - (defenceText.height / 2) - padY,
-    defenceText.width + (padX * 2),
-    defenceText.height + (padY * 2)
+    defenceIcon.x - padX,
+    defenceIcon.y - padY,
+    defenceIcon.width + (padX * 2),
+    defenceIcon.height + (padY * 2)
   );
 
   const editable = canEditActor(actor);
   countText.alpha = editable ? 1 : 0.45;
-  attackText.alpha = 1;
-  defenceText.alpha = 1;
+  countIcon.alpha = editable ? 1 : 0.45;
+  attackIcon.alpha = 1;
+  defenceIcon.alpha = 1;
   ui.visible = tokenObject.visible;
 }
 
@@ -1695,28 +1770,69 @@ function updateResilienceLabel(tokenObject) {
   }
 
   if (!label) {
-    label = new PreciseTextClass("", getResilienceStyle());
-    tuneOverlayText(label);
-    label.anchor.set(0, 0.5);
-    label.eventMode = "static";
-    label.interactive = true;
-    label.cursor = "help";
+    label = new PIXI.Container();
+    label.eventMode = "passive";
+    label.interactiveChildren = true;
+
+    const hitBox = new PIXI.Graphics();
+    hitBox.eventMode = "static";
+    hitBox.interactive = true;
+    hitBox.buttonMode = true;
+    hitBox.cursor = "help";
+
+    const icon = createOverlayIconSprite(ICON_SRC_RES, OVERLAY_FONT_SIZE + 1);
+    const valueText = new PreciseTextClass("", getIconValueStyle());
+    tuneOverlayText(valueText);
+    valueText.anchor.set(0, 0.5);
+    valueText.eventMode = "none";
+
+    label.addChild(hitBox);
+    label.addChild(icon);
+    label.addChild(valueText);
+    label._hitBox = hitBox;
+    label._icon = icon;
+    label._valueText = valueText;
     tokenObject.addChild(label);
     tokenObject[KEYS.resilienceLabel] = label;
-    label.on("pointerover", (event) => {
+
+    hitBox.on("pointerover", (event) => {
       const point = getScreenPoint(event) ?? getWorldPoint(event);
-      showOverlayTooltip("Resilience (RES)", "Resilience value used for durability and damage resolution thresholds.", point);
+      showOverlayTooltip("Resilience", "Resilience value used for durability and damage resolution thresholds.", point);
     });
-    label.on("pointermove", (event) => {
+    hitBox.on("pointermove", (event) => {
       const point = getScreenPoint(event) ?? getWorldPoint(event);
-      showOverlayTooltip("Resilience (RES)", "Resilience value used for durability and damage resolution thresholds.", point);
+      showOverlayTooltip("Resilience", "Resilience value used for durability and damage resolution thresholds.", point);
     });
-    label.on("pointerout", hideStatusTooltip);
+    hitBox.on("pointerout", hideStatusTooltip);
   }
 
-  label.text = `RES ${resilience}`;
-  tuneOverlayText(label);
-  const rowGap = Math.max(18, label.height + 4);
+  const hitBox = label._hitBox;
+  const icon = label._icon;
+  const valueText = label._valueText;
+  if (!hitBox || !icon || !valueText) {
+    clearDisplayObject(label);
+    delete tokenObject[KEYS.resilienceLabel];
+    return updateResilienceLabel(tokenObject);
+  }
+
+  valueText.text = `${resilience}`;
+  tuneOverlayText(valueText);
+  const gap = 4;
+  const padX = 3;
+  const padY = 2;
+  icon.position.set(0, Math.round(-icon.height / 2));
+  valueText.position.set(Math.round(icon.width + gap), 0);
+  const blockWidth = icon.width + gap + valueText.width;
+  const blockHeight = Math.max(icon.height, valueText.height);
+  drawHitBoxRect(
+    hitBox,
+    -padX,
+    Math.round(-(blockHeight / 2) - padY),
+    Math.round(blockWidth + (padX * 2)),
+    Math.round(blockHeight + (padY * 2))
+  );
+
+  const rowGap = Math.max(18, Math.max(icon.height, valueText.height) + 4);
   const rightTopY = (tokenObject.h / 2) - (rowGap / 2);
   label.position.set(Math.round(tokenObject.w + TOKEN_CONTROL_PAD), Math.round(rightTopY));
   label.visible = tokenObject.visible;
@@ -1849,9 +1965,14 @@ function getTypeTooltipData(actor) {
 function ensureStatusTooltip() {
   const state = game[MODULE_KEY];
   if (!state) return null;
-  if (state.statusTooltip?.element instanceof HTMLElement) return state.statusTooltip;
+  if (state.statusTooltip?.element instanceof HTMLElement && state.statusTooltip.element.isConnected) return state.statusTooltip;
+
+  for (const stale of Array.from(document.querySelectorAll(`.${STATUS_TOOLTIP_DOM_CLASS}`))) {
+    stale.remove();
+  }
 
   const element = document.createElement("div");
+  element.classList.add(STATUS_TOOLTIP_DOM_CLASS);
   element.style.position = "fixed";
   element.style.left = "0px";
   element.style.top = "0px";
@@ -1884,8 +2005,13 @@ function ensureStatusTooltip() {
   element.appendChild(title);
   element.appendChild(body);
   document.body.appendChild(element);
+  const view = canvas?.app?.renderer?.events?.domElement ?? canvas?.app?.view ?? null;
+  const hideOnLeave = () => hideStatusTooltip();
+  const hideOnBlur = () => hideStatusTooltip();
+  if (view?.addEventListener) view.addEventListener("mouseleave", hideOnLeave);
+  window.addEventListener("blur", hideOnBlur);
 
-  state.statusTooltip = { element, title, body };
+  state.statusTooltip = { element, title, body, view, hideOnLeave, hideOnBlur };
   return state.statusTooltip;
 }
 
@@ -1907,12 +2033,23 @@ function showOverlayTooltip(title, description, point, existingTooltip = null) {
   const clientX = Number(point.x ?? 0) + Number(rect?.left ?? 0) + STATUS_TOOLTIP_OFFSET_X;
   const clientY = Number(point.y ?? 0) + Number(rect?.top ?? 0) + STATUS_TOOLTIP_OFFSET_Y;
 
+  // Prevent showing canvas overlay tooltips when another UI element is on top (e.g. actor sheet).
+  const topElement = document.elementFromPoint(clientX, clientY);
+  const cursorOnCanvas = !!(view && topElement && (topElement === view || view.contains(topElement)));
+  if (!cursorOnCanvas) {
+    hideStatusTooltip();
+    return;
+  }
+
   tooltip.element.style.left = `${Math.round(clientX)}px`;
   tooltip.element.style.top = `${Math.round(clientY)}px`;
   tooltip.element.style.display = "block";
 }
 
 function hideStatusTooltip() {
+  for (const element of Array.from(document.querySelectorAll(`.${STATUS_TOOLTIP_DOM_CLASS}`))) {
+    if (element instanceof HTMLElement) element.style.display = "none";
+  }
   const state = game[MODULE_KEY];
   const element = state?.statusTooltip?.element;
   if (element instanceof HTMLElement) element.style.display = "none";
@@ -1921,8 +2058,16 @@ function hideStatusTooltip() {
 function clearStatusTooltip() {
   const state = game[MODULE_KEY];
   if (!state?.statusTooltip) return;
+  const view = state.statusTooltip.view;
+  const hideOnLeave = state.statusTooltip.hideOnLeave;
+  const hideOnBlur = state.statusTooltip.hideOnBlur;
+  if (view?.removeEventListener && hideOnLeave) view.removeEventListener("mouseleave", hideOnLeave);
+  if (hideOnBlur) window.removeEventListener("blur", hideOnBlur);
   const element = state.statusTooltip.element;
   if (element instanceof HTMLElement) element.remove();
+  for (const stale of Array.from(document.querySelectorAll(`.${STATUS_TOOLTIP_DOM_CLASS}`))) {
+    stale.remove();
+  }
   delete state.statusTooltip;
 }
 
