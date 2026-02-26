@@ -26,6 +26,7 @@ const KEYS = {
   resilienceLabel: "_towResilienceLabel",
   defaultEffectsVisible: "_towDefaultEffectsVisible",
   statusPaletteLayer: "_towStatusPaletteLayer",
+  statusPaletteBackdrop: "_towStatusPaletteBackdrop",
   statusPaletteMarker: "_towOverlayStatusPaletteMarker",
   statusPaletteTokenId: "_towOverlayStatusPaletteTokenId",
   statusPaletteMetrics: "_towStatusPaletteMetrics",
@@ -53,7 +54,8 @@ const TOKEN_CONTROL_PAD = 6;
 const NAME_TYPE_STACK_OVERLAP_PX = 13;
 const NAME_TYPE_TO_TOKEN_OFFSET_PX = 6;
 const STATUS_PALETTE_TOKEN_PAD = TOKEN_CONTROL_PAD;
-const STATUS_PALETTE_INACTIVE_TINT = 0x7A7A7A;
+const STATUS_PALETTE_INACTIVE_TINT = 0x3F3F3F;
+const STATUS_PALETTE_INACTIVE_ALPHA = 0.30;
 const STATUS_PALETTE_ACTIVE_TINT = 0xFFFFFF;
 const STATUS_PALETTE_STAGGERED_RING = 0xFFD54A;
 const STATUS_PALETTE_DEAD_RING = 0xFFFFFF;
@@ -64,6 +66,14 @@ const STATUS_PALETTE_SPECIAL_BG_OUTLINE_WIDTH = 1;
 const STATUS_PALETTE_SPECIAL_BG_OUTLINE_ALPHA = 0.72;
 const STATUS_PALETTE_SPECIAL_BG_STAGGERED_ALPHA = 0.58;
 const STATUS_PALETTE_SPECIAL_BG_DEAD_ALPHA = 0.62;
+const STATUS_PALETTE_BACKDROP_COLOR = 0xFFF4D8;
+const STATUS_PALETTE_BACKDROP_FILL_ALPHA = 0.22;
+const STATUS_PALETTE_BACKDROP_BORDER_COLOR = 0xE0C27B;
+const STATUS_PALETTE_BACKDROP_BORDER_ALPHA = 0.46;
+const STATUS_PALETTE_BACKDROP_BORDER_WIDTH = 1;
+const STATUS_PALETTE_BACKDROP_RADIUS = 6;
+const STATUS_PALETTE_BACKDROP_PAD_X = 4;
+const STATUS_PALETTE_BACKDROP_PAD_Y = 3;
 const LAYOUT_BORDER_COLOR = 0xE39A1A;
 const LAYOUT_BORDER_ALPHA = 1;
 const LAYOUT_BORDER_WIDTH = 2;
@@ -247,6 +257,20 @@ function getStatusSpecialBgStyle(iconSize, baseFillAlpha) {
     radius: roundTo(radius),
     outlineAlpha: roundTo(outlineAlpha),
     fillAlpha: roundTo(fillAlpha)
+  };
+}
+
+function getStatusPaletteBackdropStyle(iconSize) {
+  const size = Number(iconSize);
+  const sizeSafe = Number.isFinite(size) && size > 0 ? size : STATUS_PALETTE_ICON_SIZE;
+  const iconScale = clampNumber(sizeSafe / STATUS_PALETTE_ICON_SIZE, STATUS_SPECIAL_BG_ICON_SCALE_MIN, 1.3);
+  return {
+    padX: roundTo(clampNumber(STATUS_PALETTE_BACKDROP_PAD_X * Math.pow(iconScale, 0.95), 2.2, 9)),
+    padY: roundTo(clampNumber(STATUS_PALETTE_BACKDROP_PAD_Y * Math.pow(iconScale, 0.95), 1.8, 7)),
+    borderWidth: roundTo(clampNumber(STATUS_PALETTE_BACKDROP_BORDER_WIDTH * Math.pow(iconScale, 1.05), 0.45, 1.8)),
+    radius: roundTo(clampNumber(STATUS_PALETTE_BACKDROP_RADIUS * Math.pow(iconScale, 0.98), 2.8, 10)),
+    fillAlpha: roundTo(clampNumber(STATUS_PALETTE_BACKDROP_FILL_ALPHA * (0.84 + (iconScale * 0.16)), 0.14, 0.34)),
+    borderAlpha: roundTo(clampNumber(STATUS_PALETTE_BACKDROP_BORDER_ALPHA * (0.9 + (iconScale * 0.1)), 0.32, 0.62))
   };
 }
 
@@ -2527,10 +2551,24 @@ function stylePaletteSprite(sprite, actor, conditionId, activeStatuses = null) {
       bg.eventMode = "none";
       bg._towPaletteHelper = true;
       sprite._towPaletteBg = bg;
-      sprite.parent?.addChildAt(bg, 0);
+      const parent = sprite.parent;
+      if (parent) {
+        const backdrop = parent[KEYS.statusPaletteBackdrop];
+        const backdropIndex = (backdrop && backdrop.parent === parent)
+          ? Math.max(0, parent.getChildIndex(backdrop) + 1)
+          : 0;
+        parent.addChildAt(bg, Math.min(backdropIndex, parent.children.length));
+      }
     } else if (bg.parent !== sprite.parent) {
+      const parent = sprite.parent;
       bg.parent?.removeChild(bg);
-      sprite.parent?.addChildAt(bg, 0);
+      if (parent) {
+        const backdrop = parent[KEYS.statusPaletteBackdrop];
+        const backdropIndex = (backdrop && backdrop.parent === parent)
+          ? Math.max(0, parent.getChildIndex(backdrop) + 1)
+          : 0;
+        parent.addChildAt(bg, Math.min(backdropIndex, parent.children.length));
+      }
     }
     const size = Number.isFinite(Number(sprite._towIconSize)) ? Number(sprite._towIconSize) : STATUS_PALETTE_ICON_SIZE;
     const bgStyle = getStatusSpecialBgStyle(size, alpha);
@@ -2554,7 +2592,7 @@ function stylePaletteSprite(sprite, actor, conditionId, activeStatuses = null) {
 
   if (!active) {
     sprite.tint = STATUS_PALETTE_INACTIVE_TINT;
-    sprite.alpha = 0.40;
+    sprite.alpha = STATUS_PALETTE_INACTIVE_ALPHA;
     clearLegacySpecials();
     clearSpecialBg();
     return;
@@ -2579,6 +2617,35 @@ function stylePaletteSprite(sprite, actor, conditionId, activeStatuses = null) {
   clearSpecialBg();
 }
 
+function drawStatusPaletteBackdrop(layer, { iconSize, totalWidth, totalHeight }) {
+  if (!layer || layer.destroyed) return;
+  let backdrop = layer[KEYS.statusPaletteBackdrop];
+  if (!backdrop || backdrop.destroyed || backdrop.parent !== layer) {
+    if (backdrop && !backdrop.destroyed) {
+      backdrop.parent?.removeChild(backdrop);
+      backdrop.destroy();
+    }
+    backdrop = new PIXI.Graphics();
+    backdrop.eventMode = "none";
+    layer.addChildAt(backdrop, 0);
+    layer[KEYS.statusPaletteBackdrop] = backdrop;
+  } else if (layer.getChildIndex(backdrop) !== 0) {
+    layer.setChildIndex(backdrop, 0);
+  }
+
+  const style = getStatusPaletteBackdropStyle(iconSize);
+  backdrop.clear();
+  backdrop.beginFill(STATUS_PALETTE_BACKDROP_COLOR, style.fillAlpha);
+  backdrop.drawRoundedRect(
+    -style.padX,
+    -style.padY,
+    Math.max(2, totalWidth + (style.padX * 2)),
+    Math.max(2, totalHeight + (style.padY * 2)),
+    style.radius
+  );
+  backdrop.endFill();
+}
+
 function setupStatusPalette(tokenObject) {
   if (!tokenObject || tokenObject.destroyed) return;
   const actor = getActorFromToken(tokenObject);
@@ -2595,10 +2662,13 @@ function setupStatusPalette(tokenObject) {
   const iconSize = Math.max(6, Math.round((OVERLAY_FONT_SIZE + 2) * overlayScale));
   const iconGap = Math.max(1, Math.round(STATUS_PALETTE_ICON_GAP * (iconSize / STATUS_PALETTE_ICON_SIZE)));
   let layer = tokenObject[KEYS.statusPaletteLayer];
+  const iconChildrenCount = layer
+    ? (layer.children?.filter((child) => child?._towConditionId).length ?? 0)
+    : 0;
   const shouldRebuild = !layer
     || layer.destroyed
     || layer.parent !== tokenObject
-    || (layer.children?.length ?? 0) !== expectedCount
+    || iconChildrenCount !== expectedCount
     || tokenObject[KEYS.statusPaletteMetrics]?.iconSize !== iconSize
     || tokenObject[KEYS.statusPaletteMetrics]?.iconGap !== iconGap;
 
@@ -2658,11 +2728,13 @@ function setupStatusPalette(tokenObject) {
   const columns = Math.max(1, Math.ceil(expectedCount / STATUS_PALETTE_ROWS));
   const totalRows = Math.ceil(expectedCount / columns);
   const totalWidth = (columns * iconSize) + ((columns - 1) * iconGap);
+  const totalHeight = (totalRows * iconSize) + ((totalRows - 1) * iconGap);
   const posX = Math.round((tokenObject.w - totalWidth) / 2);
   const edgePad = getOverlayEdgePadPx(tokenObject);
   const statusPad = edgePad;
   const posY = Math.round(tokenObject.h + statusPad);
   layer.position.set(posX, posY);
+  drawStatusPaletteBackdrop(layer, { iconSize, totalWidth, totalHeight });
 
   layer.visible = tokenObject.visible;
   const activeStatuses = getActorStatusSet(actor);

@@ -479,10 +479,24 @@ function stylePaletteSprite(sprite, actor, conditionId, activeStatuses = null) {
       bg.eventMode = "none";
       bg._towPaletteHelper = true;
       sprite._towPaletteBg = bg;
-      sprite.parent?.addChildAt(bg, 0);
+      const parent = sprite.parent;
+      if (parent) {
+        const backdrop = parent[KEYS.statusPaletteBackdrop];
+        const backdropIndex = (backdrop && backdrop.parent === parent)
+          ? Math.max(0, parent.getChildIndex(backdrop) + 1)
+          : 0;
+        parent.addChildAt(bg, Math.min(backdropIndex, parent.children.length));
+      }
     } else if (bg.parent !== sprite.parent) {
+      const parent = sprite.parent;
       bg.parent?.removeChild(bg);
-      sprite.parent?.addChildAt(bg, 0);
+      if (parent) {
+        const backdrop = parent[KEYS.statusPaletteBackdrop];
+        const backdropIndex = (backdrop && backdrop.parent === parent)
+          ? Math.max(0, parent.getChildIndex(backdrop) + 1)
+          : 0;
+        parent.addChildAt(bg, Math.min(backdropIndex, parent.children.length));
+      }
     }
     const size = Number.isFinite(Number(sprite._towIconSize)) ? Number(sprite._towIconSize) : STATUS_PALETTE_ICON_SIZE;
     const bgStyle = getStatusSpecialBgStyle(size, alpha);
@@ -506,7 +520,7 @@ function stylePaletteSprite(sprite, actor, conditionId, activeStatuses = null) {
 
   if (!active) {
     sprite.tint = STATUS_PALETTE_INACTIVE_TINT;
-    sprite.alpha = 0.40;
+    sprite.alpha = STATUS_PALETTE_INACTIVE_ALPHA;
     clearLegacySpecials();
     clearSpecialBg();
     return;
@@ -531,6 +545,35 @@ function stylePaletteSprite(sprite, actor, conditionId, activeStatuses = null) {
   clearSpecialBg();
 }
 
+function drawStatusPaletteBackdrop(layer, { iconSize, totalWidth, totalHeight }) {
+  if (!layer || layer.destroyed) return;
+  let backdrop = layer[KEYS.statusPaletteBackdrop];
+  if (!backdrop || backdrop.destroyed || backdrop.parent !== layer) {
+    if (backdrop && !backdrop.destroyed) {
+      backdrop.parent?.removeChild(backdrop);
+      backdrop.destroy();
+    }
+    backdrop = new PIXI.Graphics();
+    backdrop.eventMode = "none";
+    layer.addChildAt(backdrop, 0);
+    layer[KEYS.statusPaletteBackdrop] = backdrop;
+  } else if (layer.getChildIndex(backdrop) !== 0) {
+    layer.setChildIndex(backdrop, 0);
+  }
+
+  const style = getStatusPaletteBackdropStyle(iconSize);
+  backdrop.clear();
+  backdrop.beginFill(STATUS_PALETTE_BACKDROP_COLOR, style.fillAlpha);
+  backdrop.drawRoundedRect(
+    -style.padX,
+    -style.padY,
+    Math.max(2, totalWidth + (style.padX * 2)),
+    Math.max(2, totalHeight + (style.padY * 2)),
+    style.radius
+  );
+  backdrop.endFill();
+}
+
 function setupStatusPalette(tokenObject) {
   if (!tokenObject || tokenObject.destroyed) return;
   const actor = getActorFromToken(tokenObject);
@@ -547,10 +590,13 @@ function setupStatusPalette(tokenObject) {
   const iconSize = Math.max(6, Math.round((OVERLAY_FONT_SIZE + 2) * overlayScale));
   const iconGap = Math.max(1, Math.round(STATUS_PALETTE_ICON_GAP * (iconSize / STATUS_PALETTE_ICON_SIZE)));
   let layer = tokenObject[KEYS.statusPaletteLayer];
+  const iconChildrenCount = layer
+    ? (layer.children?.filter((child) => child?._towConditionId).length ?? 0)
+    : 0;
   const shouldRebuild = !layer
     || layer.destroyed
     || layer.parent !== tokenObject
-    || (layer.children?.length ?? 0) !== expectedCount
+    || iconChildrenCount !== expectedCount
     || tokenObject[KEYS.statusPaletteMetrics]?.iconSize !== iconSize
     || tokenObject[KEYS.statusPaletteMetrics]?.iconGap !== iconGap;
 
@@ -610,11 +656,13 @@ function setupStatusPalette(tokenObject) {
   const columns = Math.max(1, Math.ceil(expectedCount / STATUS_PALETTE_ROWS));
   const totalRows = Math.ceil(expectedCount / columns);
   const totalWidth = (columns * iconSize) + ((columns - 1) * iconGap);
+  const totalHeight = (totalRows * iconSize) + ((totalRows - 1) * iconGap);
   const posX = Math.round((tokenObject.w - totalWidth) / 2);
   const edgePad = getOverlayEdgePadPx(tokenObject);
   const statusPad = edgePad;
   const posY = Math.round(tokenObject.h + statusPad);
   layer.position.set(posX, posY);
+  drawStatusPaletteBackdrop(layer, { iconSize, totalWidth, totalHeight });
 
   layer.visible = tokenObject.visible;
   const activeStatuses = getActorStatusSet(actor);

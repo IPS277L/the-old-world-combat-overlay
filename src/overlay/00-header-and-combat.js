@@ -26,6 +26,7 @@ const KEYS = {
   resilienceLabel: "_towResilienceLabel",
   defaultEffectsVisible: "_towDefaultEffectsVisible",
   statusPaletteLayer: "_towStatusPaletteLayer",
+  statusPaletteBackdrop: "_towStatusPaletteBackdrop",
   statusPaletteMarker: "_towOverlayStatusPaletteMarker",
   statusPaletteTokenId: "_towOverlayStatusPaletteTokenId",
   statusPaletteMetrics: "_towStatusPaletteMetrics",
@@ -53,7 +54,8 @@ const TOKEN_CONTROL_PAD = 6;
 const NAME_TYPE_STACK_OVERLAP_PX = 13;
 const NAME_TYPE_TO_TOKEN_OFFSET_PX = 6;
 const STATUS_PALETTE_TOKEN_PAD = TOKEN_CONTROL_PAD;
-const STATUS_PALETTE_INACTIVE_TINT = 0x7A7A7A;
+const STATUS_PALETTE_INACTIVE_TINT = 0x565656;
+const STATUS_PALETTE_INACTIVE_ALPHA = 0.36;
 const STATUS_PALETTE_ACTIVE_TINT = 0xFFFFFF;
 const STATUS_PALETTE_STAGGERED_RING = 0xFFD54A;
 const STATUS_PALETTE_DEAD_RING = 0xFFFFFF;
@@ -64,6 +66,14 @@ const STATUS_PALETTE_SPECIAL_BG_OUTLINE_WIDTH = 1;
 const STATUS_PALETTE_SPECIAL_BG_OUTLINE_ALPHA = 0.72;
 const STATUS_PALETTE_SPECIAL_BG_STAGGERED_ALPHA = 0.58;
 const STATUS_PALETTE_SPECIAL_BG_DEAD_ALPHA = 0.62;
+const STATUS_PALETTE_BACKDROP_COLOR = 0xFFF4D8;
+const STATUS_PALETTE_BACKDROP_FILL_ALPHA = 0.22;
+const STATUS_PALETTE_BACKDROP_BORDER_COLOR = 0xE0C27B;
+const STATUS_PALETTE_BACKDROP_BORDER_ALPHA = 0.46;
+const STATUS_PALETTE_BACKDROP_BORDER_WIDTH = 1;
+const STATUS_PALETTE_BACKDROP_RADIUS = 6;
+const STATUS_PALETTE_BACKDROP_PAD_X = 4;
+const STATUS_PALETTE_BACKDROP_PAD_Y = 3;
 const LAYOUT_BORDER_COLOR = 0xE39A1A;
 const LAYOUT_BORDER_ALPHA = 1;
 const LAYOUT_BORDER_WIDTH = 2;
@@ -247,6 +257,20 @@ function getStatusSpecialBgStyle(iconSize, baseFillAlpha) {
     radius: roundTo(radius),
     outlineAlpha: roundTo(outlineAlpha),
     fillAlpha: roundTo(fillAlpha)
+  };
+}
+
+function getStatusPaletteBackdropStyle(iconSize) {
+  const size = Number(iconSize);
+  const sizeSafe = Number.isFinite(size) && size > 0 ? size : STATUS_PALETTE_ICON_SIZE;
+  const iconScale = clampNumber(sizeSafe / STATUS_PALETTE_ICON_SIZE, STATUS_SPECIAL_BG_ICON_SCALE_MIN, 1.3);
+  return {
+    padX: roundTo(clampNumber(STATUS_PALETTE_BACKDROP_PAD_X * Math.pow(iconScale, 0.95), 2.2, 9)),
+    padY: roundTo(clampNumber(STATUS_PALETTE_BACKDROP_PAD_Y * Math.pow(iconScale, 0.95), 1.8, 7)),
+    borderWidth: roundTo(clampNumber(STATUS_PALETTE_BACKDROP_BORDER_WIDTH * Math.pow(iconScale, 1.05), 0.45, 1.8)),
+    radius: roundTo(clampNumber(STATUS_PALETTE_BACKDROP_RADIUS * Math.pow(iconScale, 0.98), 2.8, 10)),
+    fillAlpha: roundTo(clampNumber(STATUS_PALETTE_BACKDROP_FILL_ALPHA * (0.84 + (iconScale * 0.16)), 0.14, 0.34)),
+    borderAlpha: roundTo(clampNumber(STATUS_PALETTE_BACKDROP_BORDER_ALPHA * (0.9 + (iconScale * 0.1)), 0.32, 0.62))
   };
 }
 
