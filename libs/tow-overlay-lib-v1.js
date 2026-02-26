@@ -79,6 +79,7 @@ const DRAG_LINE_INNER_WIDTH = 3;
 const DRAG_ARROW_SIZE = 13;
 const DRAG_ENDPOINT_OUTER_RADIUS = 6;
 const DRAG_ENDPOINT_RING_WIDTH = 2;
+const DRAG_STYLE_SCALE_EXP = 1.05;
 const ATTACK_DEDUPE_WINDOW_MS = 700;
 const TARGET_DEDUPE_WINDOW_MS = 300;
 const AUTO_DEFENCE_WAIT_MS = 4000;
@@ -396,22 +397,35 @@ function createDragLine() {
   return line;
 }
 
-function drawDragLine(line, fromPoint, toPoint) {
+function getDragLineStyle(sourceToken = null) {
+  const overlayScale = sourceToken ? getTokenOverlayScale(sourceToken) : 1;
+  const styleScale = clampNumber(Math.pow(Math.max(0.001, overlayScale), DRAG_STYLE_SCALE_EXP), 0.26, 1.75);
+  return {
+    outerWidth: roundTo(clampNumber(DRAG_LINE_OUTER_WIDTH * styleScale, 1.6, DRAG_LINE_OUTER_WIDTH), 2),
+    innerWidth: roundTo(clampNumber(DRAG_LINE_INNER_WIDTH * styleScale, 0.9, DRAG_LINE_INNER_WIDTH), 2),
+    arrowSize: roundTo(clampNumber(DRAG_ARROW_SIZE * styleScale, 4.5, DRAG_ARROW_SIZE), 2),
+    endpointRadius: roundTo(clampNumber(DRAG_ENDPOINT_OUTER_RADIUS * styleScale, 2.4, DRAG_ENDPOINT_OUTER_RADIUS), 2),
+    endpointRingWidth: roundTo(clampNumber(DRAG_ENDPOINT_RING_WIDTH * styleScale, 0.9, DRAG_ENDPOINT_RING_WIDTH), 2)
+  };
+}
+
+function drawDragLine(line, fromPoint, toPoint, dragStyle = null) {
   if (!line || !fromPoint || !toPoint) return;
+  const style = dragStyle ?? getDragLineStyle(null);
 
   const dx = toPoint.x - fromPoint.x;
   const dy = toPoint.y - fromPoint.y;
   const angle = Math.atan2(dy, dx);
   const leftAngle = angle + (Math.PI * 5 / 6);
   const rightAngle = angle - (Math.PI * 5 / 6);
-  const leftX = toPoint.x + (Math.cos(leftAngle) * DRAG_ARROW_SIZE);
-  const leftY = toPoint.y + (Math.sin(leftAngle) * DRAG_ARROW_SIZE);
-  const rightX = toPoint.x + (Math.cos(rightAngle) * DRAG_ARROW_SIZE);
-  const rightY = toPoint.y + (Math.sin(rightAngle) * DRAG_ARROW_SIZE);
+  const leftX = toPoint.x + (Math.cos(leftAngle) * style.arrowSize);
+  const leftY = toPoint.y + (Math.sin(leftAngle) * style.arrowSize);
+  const rightX = toPoint.x + (Math.cos(rightAngle) * style.arrowSize);
+  const rightY = toPoint.y + (Math.sin(rightAngle) * style.arrowSize);
 
   line.clear();
   line.lineStyle({
-    width: DRAG_LINE_OUTER_WIDTH,
+    width: style.outerWidth,
     color: DRAG_LINE_OUTER_COLOR,
     alpha: DRAG_LINE_OUTER_ALPHA,
     cap: "round",
@@ -425,7 +439,7 @@ function drawDragLine(line, fromPoint, toPoint) {
   line.lineTo(rightX, rightY);
 
   line.lineStyle({
-    width: DRAG_LINE_INNER_WIDTH,
+    width: style.innerWidth,
     color: DRAG_LINE_INNER_COLOR,
     alpha: DRAG_LINE_INNER_ALPHA,
     cap: "round",
@@ -439,12 +453,12 @@ function drawDragLine(line, fromPoint, toPoint) {
   line.lineTo(rightX, rightY);
 
   line.lineStyle({
-    width: DRAG_ENDPOINT_RING_WIDTH + 1,
+    width: style.endpointRingWidth + 1,
     color: DRAG_LINE_OUTER_COLOR,
     alpha: DRAG_LINE_OUTER_ALPHA
   });
   line.beginFill(DRAG_LINE_INNER_COLOR, DRAG_LINE_INNER_ALPHA);
-  line.drawCircle(fromPoint.x, fromPoint.y, DRAG_ENDPOINT_OUTER_RADIUS);
+  line.drawCircle(fromPoint.x, fromPoint.y, style.endpointRadius);
   line.endFill();
 }
 
@@ -1558,6 +1572,7 @@ function createWoundControlUI(tokenObject) {
     let dragStarted = false;
     let dragFinished = false;
     let dragLine = null;
+    const dragStyle = getDragLineStyle(sourceToken);
     attackHitBox.cursor = "grabbing";
 
     const cleanupDrag = () => {
@@ -1580,7 +1595,7 @@ function createWoundControlUI(tokenObject) {
         dragStarted = true;
         dragLine = createDragLine();
       }
-      drawDragLine(dragLine, origin, point);
+      drawDragLine(dragLine, origin, point, dragStyle);
     };
 
     const finishDrag = async (upEvent) => {

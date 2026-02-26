@@ -192,6 +192,7 @@ function createWoundControlUI(tokenObject) {
     let dragStarted = false;
     let dragFinished = false;
     let dragLine = null;
+    const dragStyle = getDragLineStyle(sourceToken);
     attackHitBox.cursor = "grabbing";
 
     const cleanupDrag = () => {
@@ -214,7 +215,7 @@ function createWoundControlUI(tokenObject) {
         dragStarted = true;
         dragLine = createDragLine();
       }
-      drawDragLine(dragLine, origin, point);
+      drawDragLine(dragLine, origin, point, dragStyle);
     };
 
     const finishDrag = async (upEvent) => {
