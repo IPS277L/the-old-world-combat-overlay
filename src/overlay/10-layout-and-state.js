@@ -105,10 +105,11 @@ function drawCustomLayoutBorder(tokenObject) {
   const bounds = tokenObject[KEYS.layoutBounds];
   border.clear();
   if (!bounds) return;
+  const borderStyle = getLayoutBorderStyle(tokenObject);
   border.lineStyle({
-    width: LAYOUT_BORDER_WIDTH,
+    width: borderStyle.width,
     color: LAYOUT_BORDER_COLOR,
-    alpha: LAYOUT_BORDER_ALPHA,
+    alpha: borderStyle.alpha,
     alignment: 0.5,
     cap: "round",
     join: "round"
@@ -118,7 +119,7 @@ function drawCustomLayoutBorder(tokenObject) {
     bounds.y,
     bounds.width,
     bounds.height,
-    LAYOUT_BORDER_RADIUS
+    borderStyle.radius
   );
 }
 

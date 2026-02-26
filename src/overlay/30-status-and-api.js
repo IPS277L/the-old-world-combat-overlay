@@ -485,21 +485,21 @@ function stylePaletteSprite(sprite, actor, conditionId, activeStatuses = null) {
       sprite.parent?.addChildAt(bg, 0);
     }
     const size = Number.isFinite(Number(sprite._towIconSize)) ? Number(sprite._towIconSize) : STATUS_PALETTE_ICON_SIZE;
-    const pad = STATUS_PALETTE_SPECIAL_BG_PAD;
+    const bgStyle = getStatusSpecialBgStyle(size, alpha);
     bg.clear();
     bg.lineStyle({
-      width: STATUS_PALETTE_SPECIAL_BG_OUTLINE_WIDTH,
+      width: bgStyle.outlineWidth,
       color: STATUS_PALETTE_SPECIAL_BG_OUTLINE,
-      alpha: STATUS_PALETTE_SPECIAL_BG_OUTLINE_ALPHA,
+      alpha: bgStyle.outlineAlpha,
       alignment: 0.5
     });
-    bg.beginFill(color, alpha);
+    bg.beginFill(color, bgStyle.fillAlpha);
     bg.drawRoundedRect(
-      sprite.x - pad,
-      sprite.y - pad,
-      Math.max(2, size + (pad * 2)),
-      Math.max(2, size + (pad * 2)),
-      STATUS_PALETTE_SPECIAL_BG_RADIUS
+      sprite.x - bgStyle.pad,
+      sprite.y - bgStyle.pad,
+      Math.max(2, size + (bgStyle.pad * 2)),
+      Math.max(2, size + (bgStyle.pad * 2)),
+      bgStyle.radius
     );
     bg.endFill();
   };

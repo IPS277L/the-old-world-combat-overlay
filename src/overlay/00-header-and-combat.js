@@ -114,6 +114,12 @@ const OVERLAY_SCALE_EXP_SMALL = 0.85;
 const OVERLAY_SCALE_EXP_LARGE = 0.75;
 const OVERLAY_EDGE_PAD_MIN_FACTOR = 0.58;
 const OVERLAY_EDGE_PAD_EXP = 0.65;
+const LAYOUT_BORDER_SCALE_EXP = 1.15;
+const LAYOUT_BORDER_RADIUS_SCALE_EXP = 0.96;
+const STATUS_SPECIAL_BG_ICON_SCALE_MIN = 0.45;
+const STATUS_SPECIAL_BG_ICON_SCALE_MAX = 1.2;
+const STATUS_SPECIAL_BG_OUTLINE_SCALE_EXP = 1.2;
+const STATUS_SPECIAL_BG_RADIUS_SCALE_EXP = 0.95;
 
 const WOUND_ITEM_TYPE = "wound";
 const ICON_SRC_ATK = "icons/svg/sword.svg";
@@ -188,6 +194,59 @@ function getOverlayEdgePad(tokenObject) {
 
 function getOverlayEdgePadPx(tokenObject) {
   return Math.round(getOverlayEdgePad(tokenObject));
+}
+
+function clampNumber(value, min, max) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return min;
+  return Math.min(max, Math.max(min, numeric));
+}
+
+function roundTo(value, digits = 2) {
+  const factor = 10 ** Math.max(0, Number(digits) || 0);
+  return Math.round(Number(value) * factor) / factor;
+}
+
+function getLayoutBorderStyle(tokenObject) {
+  const overlayScale = getTokenOverlayScale(tokenObject);
+  const width = clampNumber(LAYOUT_BORDER_WIDTH * Math.pow(overlayScale, LAYOUT_BORDER_SCALE_EXP), 0.68, 2.1);
+  const radius = clampNumber(LAYOUT_BORDER_RADIUS * Math.pow(overlayScale, LAYOUT_BORDER_RADIUS_SCALE_EXP), 2.8, 8.5);
+  const alpha = clampNumber(LAYOUT_BORDER_ALPHA * (0.78 + (overlayScale * 0.22)), 0.68, 1);
+  return {
+    width: roundTo(width),
+    radius: roundTo(radius),
+    alpha: roundTo(alpha)
+  };
+}
+
+function getStatusSpecialBgStyle(iconSize, baseFillAlpha) {
+  const size = Number(iconSize);
+  const sizeSafe = Number.isFinite(size) && size > 0 ? size : STATUS_PALETTE_ICON_SIZE;
+  const iconScale = clampNumber(sizeSafe / STATUS_PALETTE_ICON_SIZE, STATUS_SPECIAL_BG_ICON_SCALE_MIN, STATUS_SPECIAL_BG_ICON_SCALE_MAX);
+  const pad = clampNumber(STATUS_PALETTE_SPECIAL_BG_PAD * Math.pow(iconScale, STATUS_SPECIAL_BG_RADIUS_SCALE_EXP), 0.45, 2.4);
+  const outlineWidth = clampNumber(
+    STATUS_PALETTE_SPECIAL_BG_OUTLINE_WIDTH * Math.pow(iconScale, STATUS_SPECIAL_BG_OUTLINE_SCALE_EXP),
+    0.28,
+    2.2
+  );
+  const radius = clampNumber(
+    STATUS_PALETTE_SPECIAL_BG_RADIUS * Math.pow(iconScale, STATUS_SPECIAL_BG_RADIUS_SCALE_EXP),
+    1.25,
+    6
+  );
+  const outlineAlpha = clampNumber(
+    STATUS_PALETTE_SPECIAL_BG_OUTLINE_ALPHA * (0.72 + (iconScale * 0.28)),
+    0.26,
+    0.9
+  );
+  const fillAlpha = clampNumber(Number(baseFillAlpha) * (0.76 + (iconScale * 0.24)), 0.16, 0.9);
+  return {
+    pad: roundTo(pad),
+    outlineWidth: roundTo(outlineWidth),
+    radius: roundTo(radius),
+    outlineAlpha: roundTo(outlineAlpha),
+    fillAlpha: roundTo(fillAlpha)
+  };
 }
 
 function preventPointerDefault(event) {
