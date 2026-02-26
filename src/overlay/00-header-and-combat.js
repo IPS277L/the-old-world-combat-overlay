@@ -176,20 +176,25 @@ function isShiftModifier(event) {
   return game.keyboard?.isModifierActive?.(shiftKey) === true;
 }
 
+function copyPoint(point) {
+  if (!point) return null;
+  return { x: Number(point.x ?? 0), y: Number(point.y ?? 0) };
+}
+
 function getWorldPoint(event) {
   if (typeof event?.getLocalPosition === "function" && canvas?.stage) {
-    return event.getLocalPosition(canvas.stage);
+    return copyPoint(event.getLocalPosition(canvas.stage));
   }
   if (typeof event?.data?.getLocalPosition === "function" && canvas?.stage) {
-    return event.data.getLocalPosition(canvas.stage);
+    return copyPoint(event.data.getLocalPosition(canvas.stage));
   }
   const global = event?.global ?? event?.data?.global;
-  if (global && canvas?.stage?.worldTransform) return canvas.stage.worldTransform.applyInverse(global);
-  return canvas.mousePosition ?? null;
+  if (global && canvas?.stage?.worldTransform) return copyPoint(canvas.stage.worldTransform.applyInverse(global));
+  return copyPoint(canvas.mousePosition);
 }
 
 function getScreenPoint(event) {
-  return event?.global ?? event?.data?.global ?? null;
+  return copyPoint(event?.global ?? event?.data?.global ?? null);
 }
 
 function getTooltipPointFromEvent(event) {
@@ -242,10 +247,10 @@ function tokenAtPoint(point, { excludeTokenId } = {}) {
   return null;
 }
 
-function setSingleTarget(token) {
-  if (!token) return;
+async function setSingleTarget(token) {
+  if (!token) return false;
   const currentTargets = Array.from(game.user.targets ?? []);
-  if (currentTargets.length === 1 && currentTargets[0]?.id === token.id) return;
+  if (currentTargets.length === 1 && currentTargets[0]?.id === token.id) return true;
 
   const state = game[MODULE_KEY];
   if (state) {
@@ -253,12 +258,27 @@ function setSingleTarget(token) {
     const key = `${game.user.id}:${token.id}`;
     const now = Date.now();
     const last = Number(state.recentTargets.get(key) ?? 0);
-    if (now - last < TARGET_DEDUPE_WINDOW_MS) return;
+    if (now - last < TARGET_DEDUPE_WINDOW_MS) return false;
     state.recentTargets.set(key, now);
   }
 
-  if (typeof game.user?.updateTokenTargets !== "function") return;
-  game.user.updateTokenTargets([token.id]);
+  if (typeof game.user?.updateTokenTargets === "function") {
+    const result = game.user.updateTokenTargets([token.id]);
+    if (result instanceof Promise) await result;
+  }
+
+  const updatedTargets = Array.from(game.user.targets ?? []);
+  const applied = updatedTargets.some((target) => target?.id === token.id);
+  if (applied) return true;
+
+  // Recovery path for cases where target set propagation lags behind the roll call.
+  if (typeof token.setTarget === "function") {
+    token.setTarget(true, { releaseOthers: true, groupSelection: false });
+    const fallbackTargets = Array.from(game.user.targets ?? []);
+    return fallbackTargets.some((target) => target?.id === token.id);
+  }
+
+  return false;
 }
 
 function shouldRunDragAttack(sourceToken, targetToken) {

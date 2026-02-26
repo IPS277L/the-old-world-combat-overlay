@@ -188,7 +188,7 @@ function createWoundControlUI(tokenObject) {
       x: sourceToken.x + (sourceToken.w / 2),
       y: sourceToken.y + (sourceToken.h / 2)
     };
-    const startPoint = getWorldPoint(event) ?? origin;
+    const startScreenPoint = getScreenPoint(event) ?? getWorldPoint(event) ?? origin;
     let dragStarted = false;
     let dragFinished = false;
     let dragLine = null;
@@ -206,8 +206,9 @@ function createWoundControlUI(tokenObject) {
     const onDragMove = (moveEvent) => {
       const point = getWorldPoint(moveEvent);
       if (!point) return;
-      const dx = point.x - startPoint.x;
-      const dy = point.y - startPoint.y;
+      const screenPoint = getScreenPoint(moveEvent) ?? point;
+      const dx = screenPoint.x - startScreenPoint.x;
+      const dy = screenPoint.y - startScreenPoint.y;
       if (!dragStarted) {
         if (Math.hypot(dx, dy) < DRAG_START_THRESHOLD_PX) return;
         dragStarted = true;
@@ -232,7 +233,7 @@ function createWoundControlUI(tokenObject) {
       if (!target) return;
       if (!shouldRunDragAttack(sourceToken, target)) return;
 
-      setSingleTarget(target);
+      await setSingleTarget(target);
       if (shiftManual) {
         await game.towActions.attackActor(sourceActor, { manual: true });
         return;
@@ -621,4 +622,3 @@ function clearAllNameLabels() {
   }
   for (const labelContainer of orphaned) clearDisplayObject(labelContainer);
 }
-
