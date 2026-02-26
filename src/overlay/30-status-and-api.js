@@ -28,16 +28,27 @@ async function runActorOpLock(actor, opKey, operation) {
   const state = game[MODULE_KEY];
   if (!state || !actor || !opKey || typeof operation !== "function") return;
   if (!state.statusRemoveInFlight) state.statusRemoveInFlight = new Set();
+  if (!state.statusRemoveQueue) state.statusRemoveQueue = new Map();
   const actorKey = actor.uuid ?? actor.id;
   if (!actorKey) return;
 
   const lockKey = `${actorKey}:${String(opKey)}`;
-  if (state.statusRemoveInFlight.has(lockKey)) return;
+  const queueKey = actorKey;
+  const previous = state.statusRemoveQueue.get(queueKey) ?? Promise.resolve();
+  let releaseQueue = null;
+  const current = new Promise((resolve) => { releaseQueue = resolve; });
+  state.statusRemoveQueue.set(queueKey, current);
+  await previous;
+
   state.statusRemoveInFlight.add(lockKey);
   try {
     await operation();
   } finally {
     state.statusRemoveInFlight.delete(lockKey);
+    releaseQueue?.();
+    if (state.statusRemoveQueue.get(queueKey) === current) {
+      state.statusRemoveQueue.delete(queueKey);
+    }
   }
 }
 
@@ -252,8 +263,9 @@ async function removeStatusIconEffect(tokenObject, sprite) {
   if (!removeKey) return;
 
   await runActorOpLock(actor, `remove:${removeKey}`, async () => {
-    if (effect) {
-      if (actor.effects?.has?.(effect.id)) await effect.delete();
+    if (effect?.id) {
+      const liveEffect = actor.effects?.get?.(effect.id);
+      if (liveEffect) await liveEffect.delete();
     } else if (conditionId && actor.hasCondition?.(conditionId)) {
       await setActorConditionState(actor, conditionId, false);
     }
@@ -393,22 +405,30 @@ async function toggleConditionFromPalette(actor, conditionId) {
     return;
   }
   const id = String(conditionId);
-  const statusSet = getActorStatusSet(actor);
-  const isActive = statusSet.has(id);
   await runActorOpLock(actor, `condition:${id}`, async () => {
+    const isActive = getActorStatusSet(actor).has(id);
     if (!isActive) {
       await setActorConditionState(actor, id, true);
       return;
     }
 
     await setActorConditionState(actor, id, false);
-    const stillActive = getActorStatusSet(actor).has(id);
+    let stillActive = getActorStatusSet(actor).has(id);
+    if (stillActive) {
+      for (let i = 0; i < 4; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        stillActive = getActorStatusSet(actor).has(id);
+        if (!stillActive) break;
+      }
+    }
     if (!stillActive) return;
 
     // Some statuses can be provided by embedded effects without hasCondition linkage.
     for (const effect of getActorEffectsByStatus(actor, id)) {
-      if (!effect?.id || !actor.effects?.has?.(effect.id)) continue;
-      await effect.delete();
+      if (!effect?.id) continue;
+      const liveEffect = actor.effects?.get?.(effect.id);
+      if (!liveEffect) continue;
+      await liveEffect.delete();
     }
   });
 }
@@ -523,13 +543,16 @@ function setupStatusPalette(tokenObject) {
   }
 
   const expectedCount = conditions.length;
-  const iconSize = STATUS_PALETTE_ICON_SIZE;
+  const overlayScale = getTokenOverlayScale(tokenObject);
+  const iconSize = Math.max(6, Math.round((OVERLAY_FONT_SIZE + 2) * overlayScale));
+  const iconGap = Math.max(1, Math.round(STATUS_PALETTE_ICON_GAP * (iconSize / STATUS_PALETTE_ICON_SIZE)));
   let layer = tokenObject[KEYS.statusPaletteLayer];
   const shouldRebuild = !layer
     || layer.destroyed
     || layer.parent !== tokenObject
     || (layer.children?.length ?? 0) !== expectedCount
-    || tokenObject[KEYS.statusPaletteMetrics]?.iconSize !== iconSize;
+    || tokenObject[KEYS.statusPaletteMetrics]?.iconSize !== iconSize
+    || tokenObject[KEYS.statusPaletteMetrics]?.iconGap !== iconGap;
 
   if (shouldRebuild) {
     clearStatusPalette(tokenObject);
@@ -558,8 +581,8 @@ function setupStatusPalette(tokenObject) {
       const col = i % columns;
       const row = Math.floor(i / columns);
       sprite.position.set(
-        col * (iconSize + STATUS_PALETTE_ICON_GAP),
-        row * (iconSize + STATUS_PALETTE_ICON_GAP)
+        col * (iconSize + iconGap),
+        row * (iconSize + iconGap)
       );
 
       const onDown = async (event) => {
@@ -581,16 +604,18 @@ function setupStatusPalette(tokenObject) {
 
       layer.addChild(sprite);
     }
-    tokenObject[KEYS.statusPaletteMetrics] = { iconSize };
+    tokenObject[KEYS.statusPaletteMetrics] = { iconSize, iconGap };
   }
 
   const columns = Math.max(1, Math.ceil(expectedCount / STATUS_PALETTE_ROWS));
   const totalRows = Math.ceil(expectedCount / columns);
-  const totalWidth = (columns * iconSize) + ((columns - 1) * STATUS_PALETTE_ICON_GAP);
-  const totalHeight = (totalRows * iconSize) + ((totalRows - 1) * STATUS_PALETTE_ICON_GAP);
+  const totalWidth = (columns * iconSize) + ((columns - 1) * iconGap);
   const posX = Math.round((tokenObject.w - totalWidth) / 2);
-  const posY = Math.round(tokenObject.h + STATUS_PALETTE_TOKEN_PAD);
+  const edgePad = getOverlayEdgePadPx(tokenObject);
+  const statusPad = edgePad;
+  const posY = Math.round(tokenObject.h + statusPad);
   layer.position.set(posX, posY);
+
   layer.visible = tokenObject.visible;
   const activeStatuses = getActorStatusSet(actor);
 
@@ -746,6 +771,7 @@ function enableOverlay() {
     deadPresenceByActor: new Map(),
     deadSyncInFlight: new Set(),
     statusRemoveInFlight: new Set(),
+    statusRemoveQueue: new Map(),
     lastCanvasScale: Number(canvas?.stage?.scale?.x ?? 1)
   };
   refreshAllOverlays();
@@ -780,6 +806,8 @@ function disableOverlay() {
   }
   if (state?.deadPresenceByActor instanceof Map) state.deadPresenceByActor.clear();
   if (state?.deadSyncInFlight instanceof Set) state.deadSyncInFlight.clear();
+  if (state?.statusRemoveInFlight instanceof Set) state.statusRemoveInFlight.clear();
+  if (state?.statusRemoveQueue instanceof Map) state.statusRemoveQueue.clear();
   if (state?.staggerWaitPatch && typeof foundry.applications?.api?.Dialog?.wait === "function") {
     foundry.applications.api.Dialog.wait = state.staggerWaitPatch.originalWait;
   }

@@ -345,6 +345,10 @@ function updateWoundControlUI(tokenObject) {
     ? createWoundControlUI(tokenObject)
     : tokenObject[KEYS.woundUI];
   const actor = getActorFromToken(tokenObject);
+  const overlayScale = getTokenOverlayScale(tokenObject);
+  const edgePad = getOverlayEdgePadPx(tokenObject);
+  const inverseScale = (overlayScale > 0) ? (1 / overlayScale) : 1;
+  ui.scale.set(overlayScale);
 
   const countText = ui._countText;
   const countIcon = ui._countIcon;
@@ -384,9 +388,9 @@ function updateWoundControlUI(tokenObject) {
     countBlockHeight + (padY * 2)
   );
 
-  ui.position.set(Math.round(tokenObject.w + TOKEN_CONTROL_PAD), Math.round(tokenObject.h / 2));
+  ui.position.set(Math.round(tokenObject.w + edgePad), Math.round(tokenObject.h / 2));
 
-  const leftX = -(tokenObject.w + (TOKEN_CONTROL_PAD * 2));
+  const leftX = -((tokenObject.w + (edgePad * 2)) * inverseScale);
   attackIcon.position.set(
     Math.round(leftX - attackIcon.width),
     Math.round(leftTopY - (attackIcon.height / 2))
@@ -395,6 +399,20 @@ function updateWoundControlUI(tokenObject) {
     Math.round(leftX - defenceIcon.width),
     Math.round(leftBottomY - (defenceIcon.height / 2))
   );
+
+  // Keep left controls at a stable token-edge gap, even when icon/text metrics vary on tiny grids.
+  if (overlayScale > 0) {
+    const targetLeftRightEdge = (-edgePad - ui.position.x) / overlayScale;
+    const currentLeftRightEdge = Math.max(
+      Number(attackIcon.x ?? 0) + Number(attackIcon.width ?? 0),
+      Number(defenceIcon.x ?? 0) + Number(defenceIcon.width ?? 0)
+    );
+    const leftDelta = Math.round(targetLeftRightEdge - currentLeftRightEdge);
+    if (leftDelta !== 0) {
+      attackIcon.x += leftDelta;
+      defenceIcon.x += leftDelta;
+    }
+  }
 
   drawHitBoxRect(
     attackHitBox,
@@ -493,12 +511,16 @@ function updateNameLabel(tokenObject) {
   }
   nameText.text = tokenName;
   typeText.text = `<${typeLabel}>`;
-  const tokenEdgePad = TOKEN_CONTROL_PAD;
+  const labelScale = getTokenOverlayScale(tokenObject);
+  const edgePad = getOverlayEdgePadPx(tokenObject);
+  const inverseScale = (labelScale > 0) ? (1 / labelScale) : 1;
+  const tokenEdgePad = edgePad * inverseScale;
+  const tokenOffset = NAME_TYPE_TO_TOKEN_OFFSET_PX * inverseScale * (edgePad / TOKEN_CONTROL_PAD);
   const lineGap = 0;
   const typeBounds = typeText.getLocalBounds();
   const typeBottom = typeBounds.y + typeBounds.height;
   const typeTop = typeBounds.y;
-  typeText.position.set(0, Math.round(-(tokenEdgePad + typeBottom) + NAME_TYPE_TO_TOKEN_OFFSET_PX));
+  typeText.position.set(0, Math.round(-(tokenEdgePad + typeBottom) + tokenOffset));
 
   const nameBounds = nameText.getLocalBounds();
   const nameBottom = nameBounds.y + nameBounds.height;
@@ -514,6 +536,14 @@ function updateNameLabel(tokenObject) {
     Math.max(8, Math.ceil((combinedMaxY - combinedMinY) + 4))
   );
   labelContainer.position.set(Math.round(tokenObject.w / 2), 0);
+  labelContainer.scale.set(labelScale);
+
+  // Snap top label using local geometry to avoid world-bounds conversions each refresh.
+  const labelBottomLocal = labelContainer.y + (combinedMaxY * labelScale);
+  const targetBottomLocal = -edgePad;
+  const deltaY = Math.round(targetBottomLocal - labelBottomLocal);
+  if (deltaY !== 0) labelContainer.y += deltaY;
+
   labelContainer.visible = tokenObject.visible;
 }
 
@@ -600,9 +630,12 @@ function updateResilienceLabel(tokenObject) {
     Math.round(blockHeight + (padY * 2))
   );
 
+  const overlayScale = getTokenOverlayScale(tokenObject);
+  const edgePad = getOverlayEdgePadPx(tokenObject);
   const rowGap = Math.max(18, Math.max(icon.height, valueText.height) + 4);
-  const rightTopY = (tokenObject.h / 2) - (rowGap / 2);
-  label.position.set(Math.round(tokenObject.w + TOKEN_CONTROL_PAD), Math.round(rightTopY));
+  const rightTopY = (tokenObject.h / 2) - ((rowGap * overlayScale) / 2);
+  label.position.set(Math.round(tokenObject.w + edgePad), Math.round(rightTopY));
+  label.scale.set(overlayScale);
   label.visible = tokenObject.visible;
 }
 

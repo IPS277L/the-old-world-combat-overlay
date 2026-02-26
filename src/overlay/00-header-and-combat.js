@@ -107,6 +107,13 @@ const OVERLAY_CONTROL_ICON_TINT = 0xFFF4D8;
 const OVERLAY_CONTROL_ICON_OUTLINE_COLOR = 0x2A2620;
 const OVERLAY_CONTROL_ICON_OUTLINE_THICKNESS = 1.4;
 const OVERLAY_CONTROL_ICON_OUTLINE_ALPHA = 0.58;
+const OVERLAY_TOKEN_BASE_PX = 100;
+const OVERLAY_SCALE_MIN = 0.26;
+const OVERLAY_SCALE_MAX = 1.75;
+const OVERLAY_SCALE_EXP_SMALL = 0.85;
+const OVERLAY_SCALE_EXP_LARGE = 0.75;
+const OVERLAY_EDGE_PAD_MIN_FACTOR = 0.58;
+const OVERLAY_EDGE_PAD_EXP = 0.65;
 
 const WOUND_ITEM_TYPE = "wound";
 const ICON_SRC_ATK = "icons/svg/sword.svg";
@@ -158,6 +165,29 @@ function getActorTokenObjects(actor) {
   }
 
   return tokens;
+}
+
+function getTokenOverlayScale(tokenObject) {
+  const width = Number(tokenObject?.w ?? NaN);
+  const height = Number(tokenObject?.h ?? NaN);
+  const tokenSize = Math.min(width, height);
+  if (!Number.isFinite(tokenSize) || tokenSize <= 0) return 1;
+  const ratio = tokenSize / OVERLAY_TOKEN_BASE_PX;
+  const curvedScale = ratio < 1
+    ? Math.pow(ratio, OVERLAY_SCALE_EXP_SMALL)
+    : Math.pow(ratio, OVERLAY_SCALE_EXP_LARGE);
+  return Math.max(OVERLAY_SCALE_MIN, Math.min(OVERLAY_SCALE_MAX, curvedScale));
+}
+
+function getOverlayEdgePad(tokenObject) {
+  const overlayScale = getTokenOverlayScale(tokenObject);
+  const scaledFactor = Math.pow(Math.max(overlayScale, 0.001), OVERLAY_EDGE_PAD_EXP);
+  const factor = Math.max(OVERLAY_EDGE_PAD_MIN_FACTOR, Math.min(1, scaledFactor));
+  return TOKEN_CONTROL_PAD * factor;
+}
+
+function getOverlayEdgePadPx(tokenObject) {
+  return Math.round(getOverlayEdgePad(tokenObject));
 }
 
 function preventPointerDefault(event) {

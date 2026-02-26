@@ -107,6 +107,13 @@ const OVERLAY_CONTROL_ICON_TINT = 0xFFF4D8;
 const OVERLAY_CONTROL_ICON_OUTLINE_COLOR = 0x2A2620;
 const OVERLAY_CONTROL_ICON_OUTLINE_THICKNESS = 1.4;
 const OVERLAY_CONTROL_ICON_OUTLINE_ALPHA = 0.58;
+const OVERLAY_TOKEN_BASE_PX = 100;
+const OVERLAY_SCALE_MIN = 0.26;
+const OVERLAY_SCALE_MAX = 1.75;
+const OVERLAY_SCALE_EXP_SMALL = 0.85;
+const OVERLAY_SCALE_EXP_LARGE = 0.75;
+const OVERLAY_EDGE_PAD_MIN_FACTOR = 0.58;
+const OVERLAY_EDGE_PAD_EXP = 0.65;
 
 const WOUND_ITEM_TYPE = "wound";
 const ICON_SRC_ATK = "icons/svg/sword.svg";
@@ -158,6 +165,29 @@ function getActorTokenObjects(actor) {
   }
 
   return tokens;
+}
+
+function getTokenOverlayScale(tokenObject) {
+  const width = Number(tokenObject?.w ?? NaN);
+  const height = Number(tokenObject?.h ?? NaN);
+  const tokenSize = Math.min(width, height);
+  if (!Number.isFinite(tokenSize) || tokenSize <= 0) return 1;
+  const ratio = tokenSize / OVERLAY_TOKEN_BASE_PX;
+  const curvedScale = ratio < 1
+    ? Math.pow(ratio, OVERLAY_SCALE_EXP_SMALL)
+    : Math.pow(ratio, OVERLAY_SCALE_EXP_LARGE);
+  return Math.max(OVERLAY_SCALE_MIN, Math.min(OVERLAY_SCALE_MAX, curvedScale));
+}
+
+function getOverlayEdgePad(tokenObject) {
+  const overlayScale = getTokenOverlayScale(tokenObject);
+  const scaledFactor = Math.pow(Math.max(overlayScale, 0.001), OVERLAY_EDGE_PAD_EXP);
+  const factor = Math.max(OVERLAY_EDGE_PAD_MIN_FACTOR, Math.min(1, scaledFactor));
+  return TOKEN_CONTROL_PAD * factor;
+}
+
+function getOverlayEdgePadPx(tokenObject) {
+  return Math.round(getOverlayEdgePad(tokenObject));
 }
 
 function preventPointerDefault(event) {
@@ -1621,6 +1651,10 @@ function updateWoundControlUI(tokenObject) {
     ? createWoundControlUI(tokenObject)
     : tokenObject[KEYS.woundUI];
   const actor = getActorFromToken(tokenObject);
+  const overlayScale = getTokenOverlayScale(tokenObject);
+  const edgePad = getOverlayEdgePadPx(tokenObject);
+  const inverseScale = (overlayScale > 0) ? (1 / overlayScale) : 1;
+  ui.scale.set(overlayScale);
 
   const countText = ui._countText;
   const countIcon = ui._countIcon;
@@ -1660,9 +1694,9 @@ function updateWoundControlUI(tokenObject) {
     countBlockHeight + (padY * 2)
   );
 
-  ui.position.set(Math.round(tokenObject.w + TOKEN_CONTROL_PAD), Math.round(tokenObject.h / 2));
+  ui.position.set(Math.round(tokenObject.w + edgePad), Math.round(tokenObject.h / 2));
 
-  const leftX = -(tokenObject.w + (TOKEN_CONTROL_PAD * 2));
+  const leftX = -((tokenObject.w + (edgePad * 2)) * inverseScale);
   attackIcon.position.set(
     Math.round(leftX - attackIcon.width),
     Math.round(leftTopY - (attackIcon.height / 2))
@@ -1671,6 +1705,20 @@ function updateWoundControlUI(tokenObject) {
     Math.round(leftX - defenceIcon.width),
     Math.round(leftBottomY - (defenceIcon.height / 2))
   );
+
+  // Keep left controls at a stable token-edge gap, even when icon/text metrics vary on tiny grids.
+  if (overlayScale > 0) {
+    const targetLeftRightEdge = (-edgePad - ui.position.x) / overlayScale;
+    const currentLeftRightEdge = Math.max(
+      Number(attackIcon.x ?? 0) + Number(attackIcon.width ?? 0),
+      Number(defenceIcon.x ?? 0) + Number(defenceIcon.width ?? 0)
+    );
+    const leftDelta = Math.round(targetLeftRightEdge - currentLeftRightEdge);
+    if (leftDelta !== 0) {
+      attackIcon.x += leftDelta;
+      defenceIcon.x += leftDelta;
+    }
+  }
 
   drawHitBoxRect(
     attackHitBox,
@@ -1769,12 +1817,16 @@ function updateNameLabel(tokenObject) {
   }
   nameText.text = tokenName;
   typeText.text = `<${typeLabel}>`;
-  const tokenEdgePad = TOKEN_CONTROL_PAD;
+  const labelScale = getTokenOverlayScale(tokenObject);
+  const edgePad = getOverlayEdgePadPx(tokenObject);
+  const inverseScale = (labelScale > 0) ? (1 / labelScale) : 1;
+  const tokenEdgePad = edgePad * inverseScale;
+  const tokenOffset = NAME_TYPE_TO_TOKEN_OFFSET_PX * inverseScale * (edgePad / TOKEN_CONTROL_PAD);
   const lineGap = 0;
   const typeBounds = typeText.getLocalBounds();
   const typeBottom = typeBounds.y + typeBounds.height;
   const typeTop = typeBounds.y;
-  typeText.position.set(0, Math.round(-(tokenEdgePad + typeBottom) + NAME_TYPE_TO_TOKEN_OFFSET_PX));
+  typeText.position.set(0, Math.round(-(tokenEdgePad + typeBottom) + tokenOffset));
 
   const nameBounds = nameText.getLocalBounds();
   const nameBottom = nameBounds.y + nameBounds.height;
@@ -1790,6 +1842,14 @@ function updateNameLabel(tokenObject) {
     Math.max(8, Math.ceil((combinedMaxY - combinedMinY) + 4))
   );
   labelContainer.position.set(Math.round(tokenObject.w / 2), 0);
+  labelContainer.scale.set(labelScale);
+
+  // Snap top label using local geometry to avoid world-bounds conversions each refresh.
+  const labelBottomLocal = labelContainer.y + (combinedMaxY * labelScale);
+  const targetBottomLocal = -edgePad;
+  const deltaY = Math.round(targetBottomLocal - labelBottomLocal);
+  if (deltaY !== 0) labelContainer.y += deltaY;
+
   labelContainer.visible = tokenObject.visible;
 }
 
@@ -1876,9 +1936,12 @@ function updateResilienceLabel(tokenObject) {
     Math.round(blockHeight + (padY * 2))
   );
 
+  const overlayScale = getTokenOverlayScale(tokenObject);
+  const edgePad = getOverlayEdgePadPx(tokenObject);
   const rowGap = Math.max(18, Math.max(icon.height, valueText.height) + 4);
-  const rightTopY = (tokenObject.h / 2) - (rowGap / 2);
-  label.position.set(Math.round(tokenObject.w + TOKEN_CONTROL_PAD), Math.round(rightTopY));
+  const rightTopY = (tokenObject.h / 2) - ((rowGap * overlayScale) / 2);
+  label.position.set(Math.round(tokenObject.w + edgePad), Math.round(rightTopY));
+  label.scale.set(overlayScale);
   label.visible = tokenObject.visible;
 }
 
@@ -1938,16 +2001,27 @@ async function runActorOpLock(actor, opKey, operation) {
   const state = game[MODULE_KEY];
   if (!state || !actor || !opKey || typeof operation !== "function") return;
   if (!state.statusRemoveInFlight) state.statusRemoveInFlight = new Set();
+  if (!state.statusRemoveQueue) state.statusRemoveQueue = new Map();
   const actorKey = actor.uuid ?? actor.id;
   if (!actorKey) return;
 
   const lockKey = `${actorKey}:${String(opKey)}`;
-  if (state.statusRemoveInFlight.has(lockKey)) return;
+  const queueKey = actorKey;
+  const previous = state.statusRemoveQueue.get(queueKey) ?? Promise.resolve();
+  let releaseQueue = null;
+  const current = new Promise((resolve) => { releaseQueue = resolve; });
+  state.statusRemoveQueue.set(queueKey, current);
+  await previous;
+
   state.statusRemoveInFlight.add(lockKey);
   try {
     await operation();
   } finally {
     state.statusRemoveInFlight.delete(lockKey);
+    releaseQueue?.();
+    if (state.statusRemoveQueue.get(queueKey) === current) {
+      state.statusRemoveQueue.delete(queueKey);
+    }
   }
 }
 
@@ -2162,8 +2236,9 @@ async function removeStatusIconEffect(tokenObject, sprite) {
   if (!removeKey) return;
 
   await runActorOpLock(actor, `remove:${removeKey}`, async () => {
-    if (effect) {
-      if (actor.effects?.has?.(effect.id)) await effect.delete();
+    if (effect?.id) {
+      const liveEffect = actor.effects?.get?.(effect.id);
+      if (liveEffect) await liveEffect.delete();
     } else if (conditionId && actor.hasCondition?.(conditionId)) {
       await setActorConditionState(actor, conditionId, false);
     }
@@ -2303,22 +2378,30 @@ async function toggleConditionFromPalette(actor, conditionId) {
     return;
   }
   const id = String(conditionId);
-  const statusSet = getActorStatusSet(actor);
-  const isActive = statusSet.has(id);
   await runActorOpLock(actor, `condition:${id}`, async () => {
+    const isActive = getActorStatusSet(actor).has(id);
     if (!isActive) {
       await setActorConditionState(actor, id, true);
       return;
     }
 
     await setActorConditionState(actor, id, false);
-    const stillActive = getActorStatusSet(actor).has(id);
+    let stillActive = getActorStatusSet(actor).has(id);
+    if (stillActive) {
+      for (let i = 0; i < 4; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        stillActive = getActorStatusSet(actor).has(id);
+        if (!stillActive) break;
+      }
+    }
     if (!stillActive) return;
 
     // Some statuses can be provided by embedded effects without hasCondition linkage.
     for (const effect of getActorEffectsByStatus(actor, id)) {
-      if (!effect?.id || !actor.effects?.has?.(effect.id)) continue;
-      await effect.delete();
+      if (!effect?.id) continue;
+      const liveEffect = actor.effects?.get?.(effect.id);
+      if (!liveEffect) continue;
+      await liveEffect.delete();
     }
   });
 }
@@ -2433,13 +2516,16 @@ function setupStatusPalette(tokenObject) {
   }
 
   const expectedCount = conditions.length;
-  const iconSize = STATUS_PALETTE_ICON_SIZE;
+  const overlayScale = getTokenOverlayScale(tokenObject);
+  const iconSize = Math.max(6, Math.round((OVERLAY_FONT_SIZE + 2) * overlayScale));
+  const iconGap = Math.max(1, Math.round(STATUS_PALETTE_ICON_GAP * (iconSize / STATUS_PALETTE_ICON_SIZE)));
   let layer = tokenObject[KEYS.statusPaletteLayer];
   const shouldRebuild = !layer
     || layer.destroyed
     || layer.parent !== tokenObject
     || (layer.children?.length ?? 0) !== expectedCount
-    || tokenObject[KEYS.statusPaletteMetrics]?.iconSize !== iconSize;
+    || tokenObject[KEYS.statusPaletteMetrics]?.iconSize !== iconSize
+    || tokenObject[KEYS.statusPaletteMetrics]?.iconGap !== iconGap;
 
   if (shouldRebuild) {
     clearStatusPalette(tokenObject);
@@ -2468,8 +2554,8 @@ function setupStatusPalette(tokenObject) {
       const col = i % columns;
       const row = Math.floor(i / columns);
       sprite.position.set(
-        col * (iconSize + STATUS_PALETTE_ICON_GAP),
-        row * (iconSize + STATUS_PALETTE_ICON_GAP)
+        col * (iconSize + iconGap),
+        row * (iconSize + iconGap)
       );
 
       const onDown = async (event) => {
@@ -2491,16 +2577,18 @@ function setupStatusPalette(tokenObject) {
 
       layer.addChild(sprite);
     }
-    tokenObject[KEYS.statusPaletteMetrics] = { iconSize };
+    tokenObject[KEYS.statusPaletteMetrics] = { iconSize, iconGap };
   }
 
   const columns = Math.max(1, Math.ceil(expectedCount / STATUS_PALETTE_ROWS));
   const totalRows = Math.ceil(expectedCount / columns);
-  const totalWidth = (columns * iconSize) + ((columns - 1) * STATUS_PALETTE_ICON_GAP);
-  const totalHeight = (totalRows * iconSize) + ((totalRows - 1) * STATUS_PALETTE_ICON_GAP);
+  const totalWidth = (columns * iconSize) + ((columns - 1) * iconGap);
   const posX = Math.round((tokenObject.w - totalWidth) / 2);
-  const posY = Math.round(tokenObject.h + STATUS_PALETTE_TOKEN_PAD);
+  const edgePad = getOverlayEdgePadPx(tokenObject);
+  const statusPad = edgePad;
+  const posY = Math.round(tokenObject.h + statusPad);
   layer.position.set(posX, posY);
+
   layer.visible = tokenObject.visible;
   const activeStatuses = getActorStatusSet(actor);
 
@@ -2656,6 +2744,7 @@ function enableOverlay() {
     deadPresenceByActor: new Map(),
     deadSyncInFlight: new Set(),
     statusRemoveInFlight: new Set(),
+    statusRemoveQueue: new Map(),
     lastCanvasScale: Number(canvas?.stage?.scale?.x ?? 1)
   };
   refreshAllOverlays();
@@ -2690,6 +2779,8 @@ function disableOverlay() {
   }
   if (state?.deadPresenceByActor instanceof Map) state.deadPresenceByActor.clear();
   if (state?.deadSyncInFlight instanceof Set) state.deadSyncInFlight.clear();
+  if (state?.statusRemoveInFlight instanceof Set) state.statusRemoveInFlight.clear();
+  if (state?.statusRemoveQueue instanceof Map) state.statusRemoveQueue.clear();
   if (state?.staggerWaitPatch && typeof foundry.applications?.api?.Dialog?.wait === "function") {
     foundry.applications.api.Dialog.wait = state.staggerWaitPatch.originalWait;
   }
