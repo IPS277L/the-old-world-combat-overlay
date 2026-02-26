@@ -170,17 +170,21 @@ function getMouseButton(event) {
 }
 
 function isShiftModifier(event) {
-  if (event?.shiftKey === true) return true;
-  if (event?.data?.originalEvent?.shiftKey === true) return true;
-  if (event?.nativeEvent?.shiftKey === true) return true;
-  return game.keyboard?.isModifierActive?.(KeyboardManager.MODIFIER_KEYS.SHIFT) === true;
+  const shiftKey = foundry.helpers?.interaction?.KeyboardManager?.MODIFIER_KEYS?.SHIFT
+    ?? KeyboardManager?.MODIFIER_KEYS?.SHIFT;
+  if (!shiftKey) return false;
+  return game.keyboard?.isModifierActive?.(shiftKey) === true;
 }
 
 function getWorldPoint(event) {
-  const global = event?.global ?? event?.data?.global;
-  if (global && canvas?.stage?.worldTransform) {
-    return canvas.stage.worldTransform.applyInverse(global);
+  if (typeof event?.getLocalPosition === "function" && canvas?.stage) {
+    return event.getLocalPosition(canvas.stage);
   }
+  if (typeof event?.data?.getLocalPosition === "function" && canvas?.stage) {
+    return event.data.getLocalPosition(canvas.stage);
+  }
+  const global = event?.global ?? event?.data?.global;
+  if (global && canvas?.stage?.worldTransform) return canvas.stage.worldTransform.applyInverse(global);
   return canvas.mousePosition ?? null;
 }
 
@@ -220,14 +224,20 @@ function bindTooltipHandlers(displayObject, getTooltipData, keyStore = null) {
 
 function tokenAtPoint(point, { excludeTokenId } = {}) {
   if (!point) return null;
+  const globalPoint = canvas?.stage?.worldTransform?.apply?.(point) ?? null;
   const placeables = [...canvas.tokens.placeables];
   for (let i = placeables.length - 1; i >= 0; i--) {
     const token = placeables[i];
     if (!token || token.destroyed || !token.visible) continue;
     if (token.id === excludeTokenId) continue;
-    if (point.x >= token.x && point.x <= token.x + token.w && point.y >= token.y && point.y <= token.y + token.h) {
-      return token;
+    if (typeof token.containsPoint === "function") {
+      if (token.containsPoint(point)) return token;
+      if (globalPoint && token.containsPoint(globalPoint)) return token;
     }
+    if (token.mesh?.containsPoint?.(point)) return token;
+    if (globalPoint && token.mesh?.containsPoint?.(globalPoint)) return token;
+    if (token.bounds?.contains?.(point.x, point.y)) return token;
+    if (point.x >= token.x && point.x <= token.x + token.w && point.y >= token.y && point.y <= token.y + token.h) return token;
   }
   return null;
 }
@@ -247,12 +257,8 @@ function setSingleTarget(token) {
     state.recentTargets.set(key, now);
   }
 
-  if (typeof game.user.updateTokenTargets === "function") {
-    game.user.updateTokenTargets([token.id]);
-    return;
-  }
-
-  token.setTarget(true, { releaseOthers: true, groupSelection: false });
+  if (typeof game.user?.updateTokenTargets !== "function") return;
+  game.user.updateTokenTargets([token.id]);
 }
 
 function shouldRunDragAttack(sourceToken, targetToken) {

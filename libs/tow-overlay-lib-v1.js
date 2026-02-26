@@ -170,17 +170,21 @@ function getMouseButton(event) {
 }
 
 function isShiftModifier(event) {
-  if (event?.shiftKey === true) return true;
-  if (event?.data?.originalEvent?.shiftKey === true) return true;
-  if (event?.nativeEvent?.shiftKey === true) return true;
-  return game.keyboard?.isModifierActive?.(KeyboardManager.MODIFIER_KEYS.SHIFT) === true;
+  const shiftKey = foundry.helpers?.interaction?.KeyboardManager?.MODIFIER_KEYS?.SHIFT
+    ?? KeyboardManager?.MODIFIER_KEYS?.SHIFT;
+  if (!shiftKey) return false;
+  return game.keyboard?.isModifierActive?.(shiftKey) === true;
 }
 
 function getWorldPoint(event) {
-  const global = event?.global ?? event?.data?.global;
-  if (global && canvas?.stage?.worldTransform) {
-    return canvas.stage.worldTransform.applyInverse(global);
+  if (typeof event?.getLocalPosition === "function" && canvas?.stage) {
+    return event.getLocalPosition(canvas.stage);
   }
+  if (typeof event?.data?.getLocalPosition === "function" && canvas?.stage) {
+    return event.data.getLocalPosition(canvas.stage);
+  }
+  const global = event?.global ?? event?.data?.global;
+  if (global && canvas?.stage?.worldTransform) return canvas.stage.worldTransform.applyInverse(global);
   return canvas.mousePosition ?? null;
 }
 
@@ -220,14 +224,20 @@ function bindTooltipHandlers(displayObject, getTooltipData, keyStore = null) {
 
 function tokenAtPoint(point, { excludeTokenId } = {}) {
   if (!point) return null;
+  const globalPoint = canvas?.stage?.worldTransform?.apply?.(point) ?? null;
   const placeables = [...canvas.tokens.placeables];
   for (let i = placeables.length - 1; i >= 0; i--) {
     const token = placeables[i];
     if (!token || token.destroyed || !token.visible) continue;
     if (token.id === excludeTokenId) continue;
-    if (point.x >= token.x && point.x <= token.x + token.w && point.y >= token.y && point.y <= token.y + token.h) {
-      return token;
+    if (typeof token.containsPoint === "function") {
+      if (token.containsPoint(point)) return token;
+      if (globalPoint && token.containsPoint(globalPoint)) return token;
     }
+    if (token.mesh?.containsPoint?.(point)) return token;
+    if (globalPoint && token.mesh?.containsPoint?.(globalPoint)) return token;
+    if (token.bounds?.contains?.(point.x, point.y)) return token;
+    if (point.x >= token.x && point.x <= token.x + token.w && point.y >= token.y && point.y <= token.y + token.h) return token;
   }
   return null;
 }
@@ -247,12 +257,8 @@ function setSingleTarget(token) {
     state.recentTargets.set(key, now);
   }
 
-  if (typeof game.user.updateTokenTargets === "function") {
-    game.user.updateTokenTargets([token.id]);
-    return;
-  }
-
-  token.setTarget(true, { releaseOthers: true, groupSelection: false });
+  if (typeof game.user?.updateTokenTargets !== "function") return;
+  game.user.updateTokenTargets([token.id]);
 }
 
 function shouldRunDragAttack(sourceToken, targetToken) {
@@ -1112,16 +1118,16 @@ function queueDeadSyncFromWounds(actor) {
   const actorKey = actor.uuid ?? actor.id;
   if (!actorKey) return;
 
-  const existingTimer = state.deadSyncTimers.get(actorKey);
-  if (existingTimer) clearTimeout(existingTimer);
-
-  const timer = setTimeout(() => {
-    state.deadSyncTimers.delete(actorKey);
-    void syncNpcDeadFromWounds(actor).catch((error) => {
-      console.error("[overlay-toggle] Failed to sync dead condition from wounds.", error);
-    });
-  }, DEAD_SYNC_DEBOUNCE_MS);
-  state.deadSyncTimers.set(actorKey, timer);
+  let debounced = state.deadSyncTimers.get(actorKey);
+  if (typeof debounced !== "function") {
+    debounced = foundry.utils.debounce((latestActor) => {
+      void syncNpcDeadFromWounds(latestActor).catch((error) => {
+        console.error("[overlay-toggle] Failed to sync dead condition from wounds.", error);
+      });
+    }, DEAD_SYNC_DEBOUNCE_MS);
+    state.deadSyncTimers.set(actorKey, debounced);
+  }
+  debounced(actor);
 }
 
 async function syncWoundsFromDeadState(actor) {
@@ -1182,14 +1188,14 @@ function queueWoundSyncFromDeadState(actor) {
   const actorKey = actor.uuid ?? actor.id;
   if (!actorKey) return;
 
-  const existingTimer = state.deadToWoundSyncTimers.get(actorKey);
-  if (existingTimer) clearTimeout(existingTimer);
-
-  const timer = setTimeout(() => {
-    state.deadToWoundSyncTimers.delete(actorKey);
-    void syncWoundsFromDeadState(actor);
-  }, DEAD_TO_WOUND_SYNC_DEBOUNCE_MS);
-  state.deadToWoundSyncTimers.set(actorKey, timer);
+  let debounced = state.deadToWoundSyncTimers.get(actorKey);
+  if (typeof debounced !== "function") {
+    debounced = foundry.utils.debounce((latestActor) => {
+      void syncWoundsFromDeadState(latestActor);
+    }, DEAD_TO_WOUND_SYNC_DEBOUNCE_MS);
+    state.deadToWoundSyncTimers.set(actorKey, debounced);
+  }
+  debounced(actor);
 }
 
 function primeDeadPresence(actor) {
@@ -1247,7 +1253,6 @@ async function removeWound(actor) {
     }
   });
 }
-
 
 function getControlStyle() {
   const style = CONFIG.canvasTextStyle?.clone?.() ?? new PIXI.TextStyle();
@@ -1917,6 +1922,23 @@ async function runActorOpLock(actor, opKey, operation) {
   }
 }
 
+async function setActorConditionState(actor, conditionId, active) {
+  if (!actor || !conditionId) return;
+  const id = String(conditionId);
+  const keepCustomFlow = id === "staggered";
+  if (!keepCustomFlow && typeof actor.toggleStatusEffect === "function") {
+    try {
+      await actor.toggleStatusEffect(id, { active });
+      return;
+    } catch (_error) {
+      // Fall back to system helpers if status effect registry lookup fails.
+    }
+  }
+
+  if (active) await actor.addCondition(id);
+  else await actor.removeCondition(id);
+}
+
 function getActorStatusSet(actor) {
   const statuses = new Set(Array.from(actor?.statuses ?? []).map((s) => String(s)));
   for (const effect of getActorEffects(actor)) {
@@ -2105,7 +2127,7 @@ async function removeStatusIconEffect(tokenObject, sprite) {
     if (effect) {
       if (actor.effects?.has?.(effect.id)) await effect.delete();
     } else if (conditionId && actor.hasCondition?.(conditionId)) {
-      await actor.removeCondition(conditionId);
+      await setActorConditionState(actor, conditionId, false);
     }
   });
 }
@@ -2246,12 +2268,12 @@ async function toggleConditionFromPalette(actor, conditionId) {
   if (hasCondition) {
     await runActorOpLock(actor, `condition:${conditionId}`, async () => {
       if (!actor.hasCondition?.(conditionId)) return;
-      await actor.removeCondition(conditionId);
+      await setActorConditionState(actor, conditionId, false);
     });
   } else {
     await runActorOpLock(actor, `condition:${conditionId}`, async () => {
       if (actor.hasCondition?.(conditionId)) return;
-      await actor.addCondition(conditionId);
+      await setActorConditionState(actor, conditionId, true);
     });
   }
 }
@@ -2608,11 +2630,17 @@ function disableOverlay() {
     state.actorOverlayResyncTimers.clear();
   }
   if (state?.deadSyncTimers instanceof Map) {
-    for (const timer of state.deadSyncTimers.values()) clearTimeout(timer);
+    for (const entry of state.deadSyncTimers.values()) {
+      if (typeof entry?.cancel === "function") entry.cancel();
+      else clearTimeout(entry);
+    }
     state.deadSyncTimers.clear();
   }
   if (state?.deadToWoundSyncTimers instanceof Map) {
-    for (const timer of state.deadToWoundSyncTimers.values()) clearTimeout(timer);
+    for (const entry of state.deadToWoundSyncTimers.values()) {
+      if (typeof entry?.cancel === "function") entry.cancel();
+      else clearTimeout(entry);
+    }
     state.deadToWoundSyncTimers.clear();
   }
   if (state?.deadPresenceByActor instanceof Map) state.deadPresenceByActor.clear();

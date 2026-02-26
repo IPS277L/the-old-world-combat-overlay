@@ -41,6 +41,23 @@ async function runActorOpLock(actor, opKey, operation) {
   }
 }
 
+async function setActorConditionState(actor, conditionId, active) {
+  if (!actor || !conditionId) return;
+  const id = String(conditionId);
+  const keepCustomFlow = id === "staggered";
+  if (!keepCustomFlow && typeof actor.toggleStatusEffect === "function") {
+    try {
+      await actor.toggleStatusEffect(id, { active });
+      return;
+    } catch (_error) {
+      // Fall back to system helpers if status effect registry lookup fails.
+    }
+  }
+
+  if (active) await actor.addCondition(id);
+  else await actor.removeCondition(id);
+}
+
 function getActorStatusSet(actor) {
   const statuses = new Set(Array.from(actor?.statuses ?? []).map((s) => String(s)));
   for (const effect of getActorEffects(actor)) {
@@ -229,7 +246,7 @@ async function removeStatusIconEffect(tokenObject, sprite) {
     if (effect) {
       if (actor.effects?.has?.(effect.id)) await effect.delete();
     } else if (conditionId && actor.hasCondition?.(conditionId)) {
-      await actor.removeCondition(conditionId);
+      await setActorConditionState(actor, conditionId, false);
     }
   });
 }
@@ -370,12 +387,12 @@ async function toggleConditionFromPalette(actor, conditionId) {
   if (hasCondition) {
     await runActorOpLock(actor, `condition:${conditionId}`, async () => {
       if (!actor.hasCondition?.(conditionId)) return;
-      await actor.removeCondition(conditionId);
+      await setActorConditionState(actor, conditionId, false);
     });
   } else {
     await runActorOpLock(actor, `condition:${conditionId}`, async () => {
       if (actor.hasCondition?.(conditionId)) return;
-      await actor.addCondition(conditionId);
+      await setActorConditionState(actor, conditionId, true);
     });
   }
 }
@@ -732,11 +749,17 @@ function disableOverlay() {
     state.actorOverlayResyncTimers.clear();
   }
   if (state?.deadSyncTimers instanceof Map) {
-    for (const timer of state.deadSyncTimers.values()) clearTimeout(timer);
+    for (const entry of state.deadSyncTimers.values()) {
+      if (typeof entry?.cancel === "function") entry.cancel();
+      else clearTimeout(entry);
+    }
     state.deadSyncTimers.clear();
   }
   if (state?.deadToWoundSyncTimers instanceof Map) {
-    for (const timer of state.deadToWoundSyncTimers.values()) clearTimeout(timer);
+    for (const entry of state.deadToWoundSyncTimers.values()) {
+      if (typeof entry?.cancel === "function") entry.cancel();
+      else clearTimeout(entry);
+    }
     state.deadToWoundSyncTimers.clear();
   }
   if (state?.deadPresenceByActor instanceof Map) state.deadPresenceByActor.clear();

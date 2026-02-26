@@ -43,6 +43,18 @@ function toElement(appElement) {
   return null;
 }
 
+function scheduleSoon(callback) {
+  if (typeof window?.requestAnimationFrame === "function") {
+    window.requestAnimationFrame(() => {
+      void callback();
+    });
+    return;
+  }
+  Promise.resolve().then(() => {
+    void callback();
+  });
+}
+
 function escapeHtml(value) {
   return foundry.utils.escapeHTML(String(value ?? ""));
 }
@@ -134,15 +146,29 @@ function renderSelectorRowButton({
 
 async function waitForChatMessage(messageId, timeoutMs = 3000) {
   if (!messageId) return null;
+  const existing = game.messages.get(messageId);
+  if (existing) return existing;
 
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    const message = game.messages.get(messageId);
-    if (message) return message;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
+  return new Promise((resolve) => {
+    let settled = false;
+    let timeoutId = null;
+    let hookId = null;
 
-  return game.messages.get(messageId) ?? null;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      if (hookId) Hooks.off("createChatMessage", hookId);
+      if (timeoutId) clearTimeout(timeoutId);
+      resolve(game.messages.get(messageId) ?? null);
+    };
+
+    hookId = Hooks.on("createChatMessage", (message) => {
+      if (message?.id !== messageId) return;
+      finish();
+    });
+
+    timeoutId = setTimeout(finish, timeoutMs);
+  });
 }
 
 function getDamageRenderState() {
@@ -199,7 +225,6 @@ async function renderDamageDisplay(message, { damage }) {
   await postSeparateDamageMessage(message, damage);
 }
 
-
 function armDamageAppend(actor, ability) {
   let timeoutId = null;
 
@@ -235,7 +260,7 @@ function armAutoSubmitDialog({ hookName, matches, submitErrorMessage }) {
       element.style.pointerEvents = "none";
     }
 
-    setTimeout(async () => {
+    scheduleSoon(async () => {
       if (typeof app?.submit !== "function") {
         console.error(`[tow-actions-lib-v1] ${submitErrorMessage}`);
         if (element) {
@@ -245,7 +270,7 @@ function armAutoSubmitDialog({ hookName, matches, submitErrorMessage }) {
         return;
       }
       await app.submit();
-    }, 1);
+    });
   });
 }
 
@@ -320,7 +345,6 @@ function renderAttackSelector(actor, attacks) {
 
   selectorDialog.render(true);
 }
-
 
 function getSkillLabel(skill) {
   return game.oldworld?.config?.skills?.[skill] ?? skill;
@@ -557,6 +581,9 @@ async function runDefenceForControlled({ manual = false } = {}) {
 game[TOW_ACTIONS_KEY] = {
   version: TOW_ACTIONS_VERSION,
   isShiftHeld,
+  escapeHtml,
+  toElement,
+  scheduleSoon,
   attackActor,
   defenceActor,
   runAttackForControlled,

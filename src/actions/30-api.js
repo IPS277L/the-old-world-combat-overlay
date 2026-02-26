@@ -62,6 +62,9 @@ async function runDefenceForControlled({ manual = false } = {}) {
 game[TOW_ACTIONS_KEY] = {
   version: TOW_ACTIONS_VERSION,
   isShiftHeld,
+  escapeHtml,
+  toElement,
+  scheduleSoon,
   attackActor,
   defenceActor,
   runAttackForControlled,

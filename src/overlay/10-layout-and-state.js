@@ -314,16 +314,16 @@ function queueDeadSyncFromWounds(actor) {
   const actorKey = actor.uuid ?? actor.id;
   if (!actorKey) return;
 
-  const existingTimer = state.deadSyncTimers.get(actorKey);
-  if (existingTimer) clearTimeout(existingTimer);
-
-  const timer = setTimeout(() => {
-    state.deadSyncTimers.delete(actorKey);
-    void syncNpcDeadFromWounds(actor).catch((error) => {
-      console.error("[overlay-toggle] Failed to sync dead condition from wounds.", error);
-    });
-  }, DEAD_SYNC_DEBOUNCE_MS);
-  state.deadSyncTimers.set(actorKey, timer);
+  let debounced = state.deadSyncTimers.get(actorKey);
+  if (typeof debounced !== "function") {
+    debounced = foundry.utils.debounce((latestActor) => {
+      void syncNpcDeadFromWounds(latestActor).catch((error) => {
+        console.error("[overlay-toggle] Failed to sync dead condition from wounds.", error);
+      });
+    }, DEAD_SYNC_DEBOUNCE_MS);
+    state.deadSyncTimers.set(actorKey, debounced);
+  }
+  debounced(actor);
 }
 
 async function syncWoundsFromDeadState(actor) {
@@ -384,14 +384,14 @@ function queueWoundSyncFromDeadState(actor) {
   const actorKey = actor.uuid ?? actor.id;
   if (!actorKey) return;
 
-  const existingTimer = state.deadToWoundSyncTimers.get(actorKey);
-  if (existingTimer) clearTimeout(existingTimer);
-
-  const timer = setTimeout(() => {
-    state.deadToWoundSyncTimers.delete(actorKey);
-    void syncWoundsFromDeadState(actor);
-  }, DEAD_TO_WOUND_SYNC_DEBOUNCE_MS);
-  state.deadToWoundSyncTimers.set(actorKey, timer);
+  let debounced = state.deadToWoundSyncTimers.get(actorKey);
+  if (typeof debounced !== "function") {
+    debounced = foundry.utils.debounce((latestActor) => {
+      void syncWoundsFromDeadState(latestActor);
+    }, DEAD_TO_WOUND_SYNC_DEBOUNCE_MS);
+    state.deadToWoundSyncTimers.set(actorKey, debounced);
+  }
+  debounced(actor);
 }
 
 function primeDeadPresence(actor) {
@@ -449,4 +449,3 @@ async function removeWound(actor) {
     }
   });
 }
-

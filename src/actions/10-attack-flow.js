@@ -33,7 +33,7 @@ function armAutoSubmitDialog({ hookName, matches, submitErrorMessage }) {
       element.style.pointerEvents = "none";
     }
 
-    setTimeout(async () => {
+    scheduleSoon(async () => {
       if (typeof app?.submit !== "function") {
         console.error(`[tow-actions-lib-v1] ${submitErrorMessage}`);
         if (element) {
@@ -43,7 +43,7 @@ function armAutoSubmitDialog({ hookName, matches, submitErrorMessage }) {
         return;
       }
       await app.submit();
-    }, 1);
+    });
   });
 }
 
@@ -118,4 +118,3 @@ function renderAttackSelector(actor, attacks) {
 
   selectorDialog.render(true);
 }
-

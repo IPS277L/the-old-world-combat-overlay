@@ -1,29 +1,65 @@
 // TODO: Read the book and validate spell casting flow
-
-const tokens = canvas.tokens.controlled;
-if (!tokens.length) {
-  return ui.notifications.warn("Select at least one token.");
-}
-
-function isShiftHeld() {
-  if (typeof game.towActions?.isShiftHeld === "function") return game.towActions.isShiftHeld();
-  const shiftKey = foundry.helpers.interaction.KeyboardManager.MODIFIER_KEYS.SHIFT;
-  return game.keyboard.isModifierActive(shiftKey);
-}
-
-// Common flow is auto-roll. Holding Shift switches to manual selection.
-const rollPath = isShiftHeld() ? "manual" : "auto";
+const ACTIONS_API_KEY = "towActions";
+const ACTIONS_RUNTIME_PARTS = [
+  "tow-actions-runtime-part-00-core-v1",
+  "tow-actions-runtime-part-10-attack-flow-v1",
+  "tow-actions-runtime-part-20-defence-flow-v1",
+  "tow-actions-runtime-part-30-api-v1"
+];
+const ACTIONS_RUNTIME_LOADER_CANDIDATES = ["tow-actions-runtime-loader-v1"];
+const ACTIONS_LIB_CANDIDATES = ["tow-actions-lib-v1", "tow-actions-lib"];
 const SELF_ROLL_CONTEXT = { skipTargets: true, targets: [] };
 
-function escapeHtml(value) {
-  return foundry.utils.escapeHTML(String(value ?? ""));
+async function executeMacroByNameCandidates(candidates) {
+  const macro = candidates
+    .map((name) => game.macros.getName(name))
+    .find(Boolean);
+  if (!macro) return false;
+  await macro.execute();
+  return true;
 }
 
-function toElement(appElement) {
-  if (!appElement) return null;
-  if (appElement instanceof HTMLElement) return appElement;
-  if (appElement[0] instanceof HTMLElement) return appElement[0];
-  return null;
+async function ensureTowActions() {
+  const hasApi = typeof game[ACTIONS_API_KEY]?.isShiftHeld === "function"
+    && typeof game[ACTIONS_API_KEY]?.escapeHtml === "function"
+    && typeof game[ACTIONS_API_KEY]?.toElement === "function"
+    && typeof game[ACTIONS_API_KEY]?.scheduleSoon === "function";
+  if (hasApi) return true;
+
+  try {
+    for (const macroName of ACTIONS_RUNTIME_PARTS) {
+      const macro = game.macros.getName(macroName);
+      if (!macro) break;
+      await macro.execute();
+    }
+    await executeMacroByNameCandidates(ACTIONS_RUNTIME_LOADER_CANDIDATES);
+  } catch (error) {
+    console.error("[spell-cast-select] Failed to execute runtime actions macros.", error);
+  }
+
+  const runtimeHasApi = typeof game[ACTIONS_API_KEY]?.isShiftHeld === "function"
+    && typeof game[ACTIONS_API_KEY]?.escapeHtml === "function"
+    && typeof game[ACTIONS_API_KEY]?.toElement === "function"
+    && typeof game[ACTIONS_API_KEY]?.scheduleSoon === "function";
+  if (runtimeHasApi) return true;
+
+  try {
+    const loaded = await executeMacroByNameCandidates(ACTIONS_LIB_CANDIDATES);
+    if (!loaded) {
+      const attempted = [...ACTIONS_RUNTIME_PARTS, ...ACTIONS_RUNTIME_LOADER_CANDIDATES, ...ACTIONS_LIB_CANDIDATES];
+      ui.notifications.error(`Shared actions macro not found. Tried: ${attempted.join(", ")}`);
+      return false;
+    }
+  } catch (error) {
+    console.error("[spell-cast-select] Failed to execute shared actions macro.", error);
+    ui.notifications.error("Failed to load shared actions macro.");
+    return false;
+  }
+
+  return typeof game[ACTIONS_API_KEY]?.isShiftHeld === "function"
+    && typeof game[ACTIONS_API_KEY]?.escapeHtml === "function"
+    && typeof game[ACTIONS_API_KEY]?.toElement === "function"
+    && typeof game[ACTIONS_API_KEY]?.scheduleSoon === "function";
 }
 
 function hasText(value) {
@@ -62,13 +98,13 @@ function armAutoSubmitCastingDialog(actor, spell) {
     const sameSpell = app?.spell?.id === spell.id;
     if (!sameActor || !sameSpell) return;
 
-    const element = toElement(app?.element);
+    const element = game[ACTIONS_API_KEY].toElement(app?.element);
     if (element) {
       element.style.visibility = "hidden";
       element.style.pointerEvents = "none";
     }
 
-    setTimeout(async () => {
+    game[ACTIONS_API_KEY].scheduleSoon(async () => {
       if (typeof app?.submit !== "function") {
         console.error("[spell-cast-select] CastingDialog.submit() is unavailable.");
         if (element) {
@@ -79,7 +115,7 @@ function armAutoSubmitCastingDialog(actor, spell) {
       }
 
       await app.submit();
-    }, 1);
+    });
   });
 }
 
@@ -101,9 +137,9 @@ async function setupCastingTest(actor, spell, { autoRoll = false } = {}) {
 function renderSpellSelector(actor, spells) {
   const buttonMarkup = spells
     .map((spell) => {
-      const itemId = escapeHtml(spell.id);
-      const itemName = escapeHtml(spell.name);
-      const loreName = escapeHtml(getLoreLabel(spell) || "No Lore");
+      const itemId = game[ACTIONS_API_KEY].escapeHtml(spell.id);
+      const itemName = game[ACTIONS_API_KEY].escapeHtml(spell.name);
+      const loreName = game[ACTIONS_API_KEY].escapeHtml(getLoreLabel(spell) || "No Lore");
       const cv = Number(spell.system?.cv ?? 0);
 
       return `<button type="button"
@@ -136,32 +172,30 @@ function renderSpellSelector(actor, spells) {
   selectorDialog.render(true);
 }
 
-async function runAutoRollPath(actor, spells) {
-  await setupCastingTest(actor, spells[0], { autoRoll: true });
-}
-
 function runManualPath(actor, spells) {
   renderSpellSelector(actor, spells);
 }
 
-async function runSpellFlow(actor) {
-  if (!actor) return;
-
-  const spells = getSortedSpells(actor);
-  if (spells.length === 0) {
-    ui.notifications.warn(`${actor.name}: no castable spells found in Magic tab.`);
+void (async () => {
+  if (!(await ensureTowActions())) return;
+  const tokens = canvas.tokens.controlled;
+  if (!tokens.length) {
+    ui.notifications.warn("Select at least one token.");
     return;
   }
 
-  if (rollPath === "manual") {
-    runManualPath(actor, spells);
-    return;
+  const rollPath = game[ACTIONS_API_KEY].isShiftHeld() ? "manual" : "auto";
+  for (const token of tokens) {
+    if (!token?.actor) continue;
+    const spells = getSortedSpells(token.actor);
+    if (spells.length === 0) {
+      ui.notifications.warn(`${token.actor.name}: no castable spells found in Magic tab.`);
+      continue;
+    }
+    if (rollPath === "manual") {
+      runManualPath(token.actor, spells);
+      continue;
+    }
+    await setupCastingTest(token.actor, spells[0], { autoRoll: true });
   }
-
-  await runAutoRollPath(actor, spells);
-}
-
-for (const token of tokens) {
-  if (!token?.actor) continue;
-  await runSpellFlow(token.actor);
-}
+})();
