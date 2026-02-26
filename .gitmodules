@@ -1,0 +1,3 @@
+[submodule "oldworld-foundryvtt"]
+	path = oldworld-foundryvtt
+	url = git@github.com:IPS277L/OldWorld-FoundryVTT.git
