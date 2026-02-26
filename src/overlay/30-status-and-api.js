@@ -68,6 +68,15 @@ function getActorStatusSet(actor) {
   return statuses;
 }
 
+function getActorEffectsByStatus(actor, conditionId) {
+  const id = String(conditionId ?? "");
+  if (!id) return [];
+  return getActorEffects(actor).filter((effect) => {
+    const statuses = Array.from(effect?.statuses ?? []).map((status) => String(status));
+    return statuses.includes(id);
+  });
+}
+
 function getAllConditionEntries() {
   const conditions = game.oldworld?.config?.conditions ?? {};
   return Object.entries(conditions)
@@ -383,18 +392,25 @@ async function toggleConditionFromPalette(actor, conditionId) {
     warnNoPermission(actor);
     return;
   }
-  const hasCondition = !!actor.hasCondition?.(conditionId);
-  if (hasCondition) {
-    await runActorOpLock(actor, `condition:${conditionId}`, async () => {
-      if (!actor.hasCondition?.(conditionId)) return;
-      await setActorConditionState(actor, conditionId, false);
-    });
-  } else {
-    await runActorOpLock(actor, `condition:${conditionId}`, async () => {
-      if (actor.hasCondition?.(conditionId)) return;
-      await setActorConditionState(actor, conditionId, true);
-    });
-  }
+  const id = String(conditionId);
+  const statusSet = getActorStatusSet(actor);
+  const isActive = statusSet.has(id);
+  await runActorOpLock(actor, `condition:${id}`, async () => {
+    if (!isActive) {
+      await setActorConditionState(actor, id, true);
+      return;
+    }
+
+    await setActorConditionState(actor, id, false);
+    const stillActive = getActorStatusSet(actor).has(id);
+    if (!stillActive) return;
+
+    // Some statuses can be provided by embedded effects without hasCondition linkage.
+    for (const effect of getActorEffectsByStatus(actor, id)) {
+      if (!effect?.id || !actor.effects?.has?.(effect.id)) continue;
+      await effect.delete();
+    }
+  });
 }
 
 function stylePaletteSprite(sprite, actor, conditionId, activeStatuses = null) {
