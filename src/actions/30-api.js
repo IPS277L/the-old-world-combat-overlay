@@ -1,11 +1,11 @@
-async function attackActor(actor, { manual = false } = {}) {
+async function attackActor(actor, { manual = false, onFastAuto = null } = {}) {
   if (!actor) return;
   if (!shouldExecuteAttack(actor, { manual })) return;
   const attacks = getSortedWeaponAttacks(actor);
   if (attacks.length === 0) return;
 
   if (manual) {
-    renderAttackSelector(actor, attacks);
+    renderAttackSelector(actor, attacks, { onFastAuto });
     return;
   }
   await setupAbilityTestWithDamage(actor, attacks[0], { autoRoll: true });

@@ -234,18 +234,27 @@ function createWoundControlUI(tokenObject) {
       if (!shouldRunDragAttack(sourceToken, target)) return;
 
       await setSingleTarget(target);
+      const armAutoOpposedFlow = () => {
+        const sourceBeforeState = snapshotActorState(sourceActor);
+        const restoreStaggerPrompt = armDefaultStaggerChoiceWound(AUTO_STAGGER_PATCH_MS);
+        armAutoDefenceForOpposed(sourceToken, target, { sourceBeforeState });
+        return () => setTimeout(() => restoreStaggerPrompt(), AUTO_APPLY_WAIT_MS);
+      };
       if (shiftManual) {
-        await game.towActions.attackActor(sourceActor, { manual: true });
+        await game.towActions.attackActor(sourceActor, {
+          manual: true,
+          onFastAuto: async () => {
+            armAutoOpposedFlow()();
+          }
+        });
         return;
       }
 
-      const sourceBeforeState = snapshotActorState(sourceActor);
-      const restoreStaggerPrompt = armDefaultStaggerChoiceWound(AUTO_STAGGER_PATCH_MS);
-      armAutoDefenceForOpposed(sourceToken, target, { sourceBeforeState });
+      const restoreAutoFlow = armAutoOpposedFlow();
       try {
         await game.towActions.attackActor(sourceActor, { manual: false });
       } finally {
-        setTimeout(() => restoreStaggerPrompt(), AUTO_APPLY_WAIT_MS);
+        restoreAutoFlow();
       }
     };
 

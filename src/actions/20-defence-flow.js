@@ -167,4 +167,3 @@ function renderDefenceSelector(actor, entries) {
 
   selectorDialog.render(true);
 }
-

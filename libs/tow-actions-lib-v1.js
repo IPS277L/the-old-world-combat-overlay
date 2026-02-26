@@ -303,7 +303,7 @@ async function setupAbilityTestWithDamage(actor, ability, { autoRoll = false } =
   return testRef;
 }
 
-function renderAttackSelector(actor, attacks) {
+function renderAttackSelector(actor, attacks, { onFastAuto } = {}) {
   const buttonMarkup = attacks
     .map((attack, index) => {
       const itemId = escapeHtml(attack.id);
@@ -338,6 +338,14 @@ function renderAttackSelector(actor, attacks) {
         const fastRoll = event.shiftKey === true;
 
         selectorDialog.close();
+        if (fastRoll && typeof onFastAuto === "function") {
+          try {
+            await onFastAuto({ actor, ability: chosen });
+          } catch (error) {
+            console.error("[tow-actions-lib-v1] onFastAuto callback failed.", error);
+          }
+        }
+
         await setupAbilityTestWithDamage(actor, chosen, { autoRoll: fastRoll });
       });
     }
@@ -516,15 +524,14 @@ function renderDefenceSelector(actor, entries) {
   selectorDialog.render(true);
 }
 
-
-async function attackActor(actor, { manual = false } = {}) {
+async function attackActor(actor, { manual = false, onFastAuto = null } = {}) {
   if (!actor) return;
   if (!shouldExecuteAttack(actor, { manual })) return;
   const attacks = getSortedWeaponAttacks(actor);
   if (attacks.length === 0) return;
 
   if (manual) {
-    renderAttackSelector(actor, attacks);
+    renderAttackSelector(actor, attacks, { onFastAuto });
     return;
   }
   await setupAbilityTestWithDamage(actor, attacks[0], { autoRoll: true });
