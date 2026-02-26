@@ -45,6 +45,9 @@ This folder is structured as a standalone macros repository.
 
 ## Build
 
+- Rebuild all artifacts:
+  - `bash macros/tools/build-all.sh`
+
 - Rebuild actions artifacts:
   - `bash macros/tools/build-actions-lib.sh`
 
