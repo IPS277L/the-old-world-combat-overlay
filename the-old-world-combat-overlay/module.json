@@ -1,0 +1,51 @@
+{
+  "id": "the-old-world-combat-overlay",
+  "title": "The Old World Combat Overlay",
+  "description": "Combat overlay and automation helpers for Warhammer: The Old World Roleplaying Game.",
+  "version": "0.1.0",
+  "compatibility": {
+    "minimum": 13,
+    "verified": 13,
+    "maximum": 13
+  },
+  "scripts": [
+    "scripts/constants.js",
+    "scripts/api/register-public-apis.js",
+    "scripts/settings/register-settings.js",
+    "scripts/hooks/register-module-hooks.js",
+    "scripts/hooks/register-overlay-hooks.js",
+    "scripts/services/actions/action-runtime-constants.js",
+    "scripts/services/overlay/overlay-runtime-constants.js",
+    "scripts/services/system-adapter/tow-combat-overlay-system-adapter.js",
+    "scripts/services/system-adapter/default-system-adapter.js",
+    "scripts/services/actions/core-service.js",
+    "scripts/services/actions/attack-service.js",
+    "scripts/services/actions/defence-service.js",
+    "scripts/services/actions/casting-service.js",
+    "scripts/services/actions/register-action-services.js",
+    "scripts/services/actions/public-api-service.js",
+    "scripts/services/overlay/core-helpers-service.js",
+    "scripts/services/overlay/actions-bridge-service.js",
+    "scripts/services/overlay/layout-state-service.js",
+    "scripts/services/overlay/controls-service.js",
+    "scripts/services/overlay/automation-service.js",
+    "scripts/services/overlay/overlay-service.js",
+    "scripts/main.js"
+  ],
+  "esmodules": [],
+  "styles": [],
+  "packs": [],
+  "languages": [],
+  "relationships": {
+    "systems": [
+      {
+        "id": "whtow",
+        "type": "system",
+        "compatibility": {
+          "minimum": "1.0.5",
+          "verified": "1.0.5"
+        }
+      }
+    ]
+  }
+}
