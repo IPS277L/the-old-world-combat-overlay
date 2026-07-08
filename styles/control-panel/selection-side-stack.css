@@ -151,8 +151,8 @@
 .tow-combat-overlay-control-panel__selection-side-stack
   .tow-combat-overlay-control-panel__status-icon
   img {
-  width: calc(var(--tow-control-panel-status-size) - 5px);
-  height: calc(var(--tow-control-panel-status-size) - 5px);
+  width: 100%;
+  height: 100%;
 }
 
 .tow-combat-overlay-control-panel__selection-side-stack
