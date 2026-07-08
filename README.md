@@ -1,4 +1,4 @@
-![FoundryVTT Compatibility](https://img.shields.io/badge/FoundryVTT-v13-orange) ![OldWorld-FoundryVTT Compatibility](https://img.shields.io/badge/OldWorld--FoundryVTT-v1.0.5-1f6feb) ![Latest Version](https://img.shields.io/github/v/release/IPS277L/tow-combat-overlay?label=Latest%20Version&color=2ea043)
+![FoundryVTT Compatibility](https://img.shields.io/badge/FoundryVTT-v14-orange) ![OldWorld-FoundryVTT Compatibility](https://img.shields.io/badge/OldWorld--FoundryVTT-v1.2.2-fce06d4) ![Latest Version](https://img.shields.io/github/v/release/IPS277L/tow-combat-overlay?label=Latest%20Version&color=2ea043)
 
 # Warhammer: The Old World - Combat Overlay
 
