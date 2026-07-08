@@ -73,7 +73,7 @@
   display: block;
   pointer-events: none;
   opacity: 1;
-  filter: saturate(0.45) grayscale(0.3);
+  filter: grayscale(1) saturate(0) contrast(0.92) brightness(0.86);
 }
 
 .tow-combat-overlay-control-panel__status-icon.is-active {
